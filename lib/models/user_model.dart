@@ -1,0 +1,46 @@
+class UserModel {
+  final String uid;
+  final String name;
+  final String email;
+  final String phoneNumber;
+  final String about;
+  final String profileImageUrl;
+  final bool isOnline;
+  final String? fcmToken;
+
+  UserModel({
+    required this.uid,
+    required this.name,
+    required this.email,
+    required this.phoneNumber,
+    this.about = "Hey there! I am using ConnectCall.",
+    this.profileImageUrl = "",
+    this.isOnline = true,
+    this.fcmToken,
+  });
+
+  factory UserModel.fromMap(Map<String, dynamic> data, String uid) {
+    return UserModel(
+      uid: uid,
+      name: data['name'] ?? '',
+      email: data['email'] ?? '',
+      phoneNumber: data['phoneNumber'] ?? '',
+      about: data['about'] ?? "Hey there! I am using ConnectCall.",
+      profileImageUrl: data['profileImageUrl'] ?? '',
+      isOnline: data['isOnline'] ?? false,
+      fcmToken: data['fcmToken'],
+    );
+  }
+
+  Map<String, dynamic> toMap() {
+    return {
+      'name': name,
+      'email': email,
+      'phoneNumber': phoneNumber,
+      'about': about,
+      'profileImageUrl': profileImageUrl,
+      'isOnline': isOnline,
+      'fcmToken': fcmToken,
+    };
+  }
+}
