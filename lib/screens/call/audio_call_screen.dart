@@ -3,6 +3,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:agora_rtc_engine/agora_rtc_engine.dart';
 import 'package:permission_handler/permission_handler.dart';
 import '../../core/theme/app_theme.dart';
+import 'dart:async';
 
 const String appId = "fd5f9d592fc54c8d9623c27892c2a64b"; 
 const String token = "007eJxTYFh+bbfIpYKbvhaW3BdeS4bPDxHftPjM7XDTSQ3XbO5Ff3yvwJCWYppmmWJqaZSWbGqSbJFiaWZknGxkbmFplGyUaGaS9HjzsqyGQEaGx19PMzIyQCCIz8FQklpckpyYk8PAAACN1SSZ"; 
@@ -23,6 +24,7 @@ class _AudioCallScreenState extends State<AudioCallScreen> {
   bool _localUserJoined = false;
   RtcEngine? _engine;
   bool _isEngineInitialized = false;
+  Timer? _missedCallTimer;
 
   @override
   void initState() {
@@ -34,11 +36,33 @@ class _AudioCallScreenState extends State<AudioCallScreen> {
     final status = await Permission.microphone.request();
     if (status != PermissionStatus.granted) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Microphone permission is required')));
-        Navigator.pop(context);
+        await showDialog(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            title: const Text('Permission Denied'),
+            content: const Text('Microphone permission is required to make this call.'),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('OK')),
+            ],
+          ),
+        );
+        if (mounted) Navigator.pop(context);
       }
       return;
     }
+
+    // Missed call timer (45 seconds)
+    _missedCallTimer = Timer(const Duration(seconds: 45), () async {
+      if (_remoteUid == null && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Call Missed')));
+        try {
+          await FirebaseFirestore.instance.collection('calls').doc(widget.callerName).update({'status': 'missed'});
+        } catch (e) {
+          debugPrint("Failed to update status to missed: $e");
+        }
+        if (mounted) Navigator.pop(context);
+      }
+    });
 
     // Create and initialize engine
     _engine = createAgoraRtcEngine();
@@ -63,9 +87,13 @@ class _AudioCallScreenState extends State<AudioCallScreen> {
         },
         onUserJoined: (RtcConnection connection, int remoteUid, int elapsed) {
           debugPrint("remote user $remoteUid joined");
-          setState(() {
-            _remoteUid = remoteUid;
-          });
+          if (mounted) {
+            setState(() {
+              _remoteUid = remoteUid;
+            });
+            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Call Connected')));
+            _missedCallTimer?.cancel();
+          }
         },
         onUserOffline: (RtcConnection connection, int remoteUid, UserOfflineReasonType reason) {
           debugPrint("remote user $remoteUid left channel");
@@ -115,10 +143,10 @@ class _AudioCallScreenState extends State<AudioCallScreen> {
       if (doc.exists && mounted) {
         final status = doc.data()?['status'] as String?;
         if (status == 'declined') {
-          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Call declined')));
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('User rejected the call')));
           Navigator.pop(context);
         } else if (status == 'ended' && _remoteUid == null) {
-          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Call ended')));
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Call Ended')));
           Navigator.pop(context);
         }
       }
@@ -127,6 +155,7 @@ class _AudioCallScreenState extends State<AudioCallScreen> {
 
   @override
   void dispose() {
+    _missedCallTimer?.cancel();
     super.dispose();
     _dispose();
   }

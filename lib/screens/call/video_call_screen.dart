@@ -4,6 +4,7 @@ import 'package:agora_rtc_engine/agora_rtc_engine.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:device_info_plus/device_info_plus.dart';
 import 'dart:io';
+import 'dart:async';
 
 const String appId = "fd5f9d592fc54c8d9623c27892c2a64b"; 
 const String token = "007eJxTYFh+bbfIpYKbvhaW3BdeS4bPDxHftPjM7XDTSQ3XbO5Ff3yvwJCWYppmmWJqaZSWbGqSbJFiaWZknGxkbmFplGyUaGaS9HjzsqyGQEaGx19PMzIyQCCIz8FQklpckpyYk8PAAACN1SSZ"; 
@@ -16,7 +17,7 @@ class VideoCallScreen extends StatefulWidget {
   State<VideoCallScreen> createState() => _VideoCallScreenState();
 }
 
-class _VideoCallScreenState extends State<VideoCallScreen> {
+class _VideoCallScreenState extends State<VideoCallScreen> with WidgetsBindingObserver {
   int? _remoteUid;
   bool _localUserJoined = false;
   RtcEngine? _engine;
@@ -29,10 +30,13 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
   String _networkQuality = 'Good';
   Color _networkColor = Colors.green;
   String? _errorMsg;
+  Timer? _missedCallTimer;
+  Key _videoKey = UniqueKey();
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _checkDeviceAndInitAgora();
   }
 
@@ -51,11 +55,33 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
     final statuses = await [Permission.microphone, Permission.camera].request();
     if (statuses[Permission.microphone] != PermissionStatus.granted || statuses[Permission.camera] != PermissionStatus.granted) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Camera and Microphone permissions are required')));
-        Navigator.pop(context);
+        await showDialog(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            title: const Text('Permission Denied'),
+            content: const Text('Camera and Microphone permissions are required to make this call.'),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('OK')),
+            ],
+          ),
+        );
+        if (mounted) Navigator.pop(context);
       }
       return;
     }
+
+    // Missed call timer (45 seconds)
+    _missedCallTimer = Timer(const Duration(seconds: 45), () async {
+      if (_remoteUid == null && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Call Missed')));
+        try {
+          await FirebaseFirestore.instance.collection('calls').doc(widget.callerName).update({'status': 'missed'});
+        } catch (e) {
+          debugPrint("Failed to update status to missed: $e");
+        }
+        if (mounted) Navigator.pop(context);
+      }
+    });
 
     // Create and initialize engine
     _engine = createAgoraRtcEngine();
@@ -80,9 +106,13 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
         },
         onUserJoined: (RtcConnection connection, int remoteUid, int elapsed) {
           debugPrint("remote user $remoteUid joined");
-          setState(() {
-            _remoteUid = remoteUid;
-          });
+          if (mounted) {
+            setState(() {
+              _remoteUid = remoteUid;
+            });
+            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Call Connected')));
+            _missedCallTimer?.cancel();
+          }
         },
         onUserOffline: (RtcConnection connection, int remoteUid, UserOfflineReasonType reason) {
           debugPrint("remote user $remoteUid left channel");
@@ -160,11 +190,11 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
       if (doc.exists && mounted) {
         final status = doc.data()?['status'] as String?;
         if (status == 'declined') {
-          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Call declined')));
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('User rejected the call')));
           Navigator.pop(context);
         } else if (status == 'ended' && _remoteUid == null) {
           // If receiver ends it before joining
-          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Call ended')));
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Call Ended')));
           Navigator.pop(context);
         }
       }
@@ -172,7 +202,21 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
   }
 
   @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      // When app resumes, force recreate the SurfaceView to fix black/missing screen issues on Android
+      if (mounted) {
+        setState(() {
+          _videoKey = UniqueKey();
+        });
+      }
+    }
+  }
+
+  @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _missedCallTimer?.cancel();
     super.dispose();
     _dispose();
   }
@@ -235,6 +279,7 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
           Center(
             child: _remoteUid != null
                 ? AgoraVideoView(
+                    key: ValueKey('remote_${_videoKey.hashCode}'),
                     controller: VideoViewController.remote(
                       rtcEngine: _engine!,
                       canvas: VideoCanvas(uid: _remoteUid),
@@ -243,7 +288,7 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
                     ),
                   )
                 : Text(
-                    _errorMsg ?? 'Waiting for other user to join...',
+                    _errorMsg ?? 'Calling...',
                     style: TextStyle(color: _errorMsg != null ? Colors.red : Colors.white, fontWeight: _errorMsg != null ? FontWeight.bold : FontWeight.normal),
                     textAlign: TextAlign.center,
                   ),
@@ -297,6 +342,7 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
               height: 150,
               child: !_isVideoOff
                   ? AgoraVideoView(
+                      key: ValueKey('local_${_videoKey.hashCode}'),
                       controller: VideoViewController(
                         rtcEngine: _engine!,
                         canvas: const VideoCanvas(uid: 0),

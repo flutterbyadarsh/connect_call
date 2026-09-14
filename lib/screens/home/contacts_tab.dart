@@ -3,6 +3,7 @@ import 'package:flutter/cupertino.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:uuid/uuid.dart';
+import 'package:connectivity_plus/connectivity_plus.dart';
 import '../../services/auth_service.dart';
 import '../../services/user_service.dart';
 import '../../models/user_model.dart';
@@ -24,7 +25,24 @@ class _ContactsTabState extends ConsumerState<ContactsTab> {
     final caller = ref.read(authServiceProvider).currentUser;
     if (caller == null) return;
     
-    final callId = Uuid().v4(); // Generate a unique channel ID
+    // Check if the receiver is online
+    if (!receiver.isOnline) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('User is offline and cannot be called right now.')));
+      }
+      return;
+    }
+
+    // Check for internet connection
+    final connectivityResult = await Connectivity().checkConnectivity();
+    if (connectivityResult.contains(ConnectivityResult.none)) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Internet connection is unavailable.')));
+      }
+      return;
+    }
+    
+    final callId = const Uuid().v4(); // Generate a unique channel ID
 
     // Create a call document to trigger the Cloud Function
     await FirebaseFirestore.instance.collection('calls').doc(callId).set({
