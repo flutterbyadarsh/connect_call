@@ -1,59 +1,61 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:agora_rtc_engine/agora_rtc_engine.dart';
-import 'package:permission_handler/permission_handler.dart';
 import '../../core/theme/app_theme.dart';
+import '../../services/agora_service.dart';
+import '../../services/auth_service.dart';
 import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
+import 'dart:typed_data';
 
-const String appId = "fd5f9d592fc54c8d9623c27892c2a64b"; 
-const String token = "007eJxTYFh+bbfIpYKbvhaW3BdeS4bPDxHftPjM7XDTSQ3XbO5Ff3yvwJCWYppmmWJqaZSWbGqSbJFiaWZknGxkbmFplGyUaGaS9HjzsqyGQEaGx19PMzIyQCCIz8FQklpckpyYk8PAAACN1SSZ"; 
+class AudioCallScreen extends ConsumerStatefulWidget {
+  final String callerName; // This is now the Firestore callId (UUID)
+  final String agoraChannelId;
 
-class AudioCallScreen extends StatefulWidget {
-  final String callerName;
-  const AudioCallScreen({super.key, required this.callerName});
+  const AudioCallScreen({super.key, required this.callerName, required this.agoraChannelId});
 
   @override
-  State<AudioCallScreen> createState() => _AudioCallScreenState();
+  ConsumerState<AudioCallScreen> createState() => _AudioCallScreenState();
 }
 
-class _AudioCallScreenState extends State<AudioCallScreen> {
-  bool _isMuted = false;
-  bool _isSpeaker = false;
-  
-  int? _remoteUid;
-  bool _localUserJoined = false;
-  RtcEngine? _engine;
-  bool _isEngineInitialized = false;
+class _AudioCallScreenState extends ConsumerState<AudioCallScreen> {
   Timer? _missedCallTimer;
+  StreamSubscription? _callStatusSubscription;
+  bool _canPop = false;
+  
+  String _remoteName = 'Connecting...';
+  String _remotePic = '';
+  Uint8List? _remotePicBytes;
+  
+  Timer? _callDurationTimer;
+  int _callDurationSeconds = 0;
+  
+  String get _formattedDuration {
+    final minutes = (_callDurationSeconds / 60).floor().toString().padLeft(2, '0');
+    final seconds = (_callDurationSeconds % 60).toString().padLeft(2, '0');
+    return '$minutes:$seconds';
+  }
 
   @override
   void initState() {
     super.initState();
-    initAgora();
+    _initCall();
   }
 
-  Future<void> initAgora() async {
-    final status = await Permission.microphone.request();
-    if (status != PermissionStatus.granted) {
-      if (mounted) {
-        await showDialog(
-          context: context,
-          builder: (ctx) => AlertDialog(
-            title: const Text('Permission Denied'),
-            content: const Text('Microphone permission is required to make this call.'),
-            actions: [
-              TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('OK')),
-            ],
-          ),
-        );
-        if (mounted) Navigator.pop(context);
-      }
-      return;
-    }
+  void _initCall() {
+    // Initialize Agora non-blocking
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      ref.read(agoraServiceProvider.notifier).initAgora(
+        channelId: widget.agoraChannelId,
+        isVideo: false,
+      );
+    });
 
     // Missed call timer (45 seconds)
     _missedCallTimer = Timer(const Duration(seconds: 45), () async {
-      if (_remoteUid == null && mounted) {
+      final state = ref.read(agoraServiceProvider);
+      if (state.remoteUid == null && mounted) {
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Call Missed')));
         try {
           await FirebaseFirestore.instance.collection('calls').doc(widget.callerName).update({'status': 'missed'});
@@ -64,90 +66,59 @@ class _AudioCallScreenState extends State<AudioCallScreen> {
       }
     });
 
-    // Create and initialize engine
-    _engine = createAgoraRtcEngine();
-    await _engine!.initialize(const RtcEngineContext(
-      appId: appId,
-      channelProfile: ChannelProfileType.channelProfileCommunication,
-    ));
-
-    if (mounted) {
-      setState(() {
-        _isEngineInitialized = true;
-      });
-    }
-
-    _engine!.registerEventHandler(
-      RtcEngineEventHandler(
-        onJoinChannelSuccess: (RtcConnection connection, int elapsed) {
-          debugPrint("local user ${connection.localUid} joined");
-          setState(() {
-            _localUserJoined = true;
-          });
-        },
-        onUserJoined: (RtcConnection connection, int remoteUid, int elapsed) {
-          debugPrint("remote user $remoteUid joined");
-          if (mounted) {
-            setState(() {
-              _remoteUid = remoteUid;
-            });
-            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Call Connected')));
-            _missedCallTimer?.cancel();
-          }
-        },
-        onUserOffline: (RtcConnection connection, int remoteUid, UserOfflineReasonType reason) {
-          debugPrint("remote user $remoteUid left channel");
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Call ended')));
-            Navigator.pop(context);
-          }
-        },
-        onError: (ErrorCodeType err, String msg) {
-          debugPrint('[Agora Error] $err : $msg');
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Agora Error: ${err.name}')));
-          }
-        },
-      ),
-    );
-
-    try {
-      // Disable video for audio-only call
-      await _engine!.disableVideo();
-      await _engine!.enableAudio();
-
-      await _engine!.joinChannel(
-        token: token,
-        channelId: 'testcall',
-        uid: 0,
-        options: const ChannelMediaOptions(
-          publishMicrophoneTrack: true,
-          autoSubscribeAudio: true,
-          publishCameraTrack: false,
-          autoSubscribeVideo: false,
-        ),
-      );
-      
-      // Use earpiece by default for audio calls. MUST be called after joining.
-      await _engine!.setEnableSpeakerphone(false);
-    } catch (e) {
-      debugPrint("Agora Setup Error: $e");
-    }
-
     // Listen to call status changes from receiver (e.g. declined or ended)
-    FirebaseFirestore.instance
+    _callStatusSubscription = FirebaseFirestore.instance
         .collection('calls')
         .doc(widget.callerName)
-        .snapshots()
+        .snapshots(includeMetadataChanges: true)
         .listen((doc) {
+      if (doc.metadata.isFromCache) return; // Prevent popping immediately from local cache
+      
       if (doc.exists && mounted) {
         final status = doc.data()?['status'] as String?;
+        final state = ref.read(agoraServiceProvider);
+
         if (status == 'declined') {
-          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('User rejected the call')));
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Call Declined')));
           Navigator.pop(context);
-        } else if (status == 'ended' && _remoteUid == null) {
+        } else if (status == 'ended') {
           ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Call Ended')));
           Navigator.pop(context);
+        } else if (status == 'accepted') {
+          _missedCallTimer?.cancel();
+        }
+        
+        final data = doc.data();
+        if (data != null) {
+           final currentUid = ref.read(authServiceProvider).currentUser?.uid;
+           if (currentUid != null) {
+              String newRemoteName = _remoteName;
+              String newRemotePic = _remotePic;
+              
+              if (data['callerId'] == currentUid) {
+                 newRemoteName = data['receiverName'] ?? 'Unknown';
+                 newRemotePic = data['receiverPic'] ?? '';
+              } else {
+                 newRemoteName = data['callerName'] ?? 'Unknown';
+                 newRemotePic = data['callerPic'] ?? '';
+              }
+              
+              if (newRemoteName != _remoteName || newRemotePic != _remotePic) {
+                 setState(() {
+                   _remoteName = newRemoteName;
+                   _remotePic = newRemotePic;
+                   if (_remotePic.isNotEmpty) {
+                     try {
+                       _remotePicBytes = base64Decode(_remotePic.split(',').last);
+                     } catch (e) {
+                       _remotePicBytes = null;
+                     }
+                   } else {
+                     _remotePicBytes = null;
+                   }
+                 });
+              }
+           }
         }
       }
     });
@@ -156,110 +127,202 @@ class _AudioCallScreenState extends State<AudioCallScreen> {
   @override
   void dispose() {
     _missedCallTimer?.cancel();
+    _callStatusSubscription?.cancel();
+    _callDurationTimer?.cancel();
     super.dispose();
-    _dispose();
   }
 
-  Future<void> _dispose() async {
-    if (_engine != null) {
-      await _engine!.leaveChannel();
-      await _engine!.release();
-    }
-    try {
-      await FirebaseFirestore.instance.collection('calls').doc(widget.callerName).update({
-        'status': 'ended',
+  void _startDurationTimer() {
+    _callDurationTimer?.cancel();
+    _callDurationTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (mounted) {
+        setState(() {
+          _callDurationSeconds++;
+        });
+      }
+    });
+  }
+
+  void _endCall() {
+    if (_canPop) return;
+    
+    _callStatusSubscription?.cancel();
+    final notifier = ref.read(agoraServiceProvider.notifier);
+    
+    // Run in background without awaiting to prevent UI freeze
+    notifier.disposeEngine(widget.callerName);
+    
+    if (mounted) {
+      setState(() {
+        _canPop = true;
       });
-    } catch (e) {
-      debugPrint("Failed to update call status to ended: $e");
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          Navigator.of(context).pop();
+        }
+      });
     }
-  }
-
-  void _toggleMicrophone() {
-    setState(() {
-      _isMuted = !_isMuted;
-    });
-    _engine?.muteLocalAudioStream(_isMuted);
-  }
-
-  void _toggleSpeaker() {
-    setState(() {
-      _isSpeaker = !_isSpeaker;
-    });
-    _engine?.setEnableSpeakerphone(_isSpeaker);
   }
 
   @override
   Widget build(BuildContext context) {
-    if (!_isEngineInitialized) {
-      return Scaffold(
-        backgroundColor: Colors.grey.shade900,
-        body: const Center(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              CircularProgressIndicator(color: Colors.white),
-              SizedBox(height: 16),
-              Text('Initializing microphone...', style: TextStyle(color: Colors.white)),
+    final agoraState = ref.watch(agoraServiceProvider);
+    final agoraNotifier = ref.read(agoraServiceProvider.notifier);
+
+    ref.listen<AgoraState>(agoraServiceProvider, (previous, next) {
+      if (next.isCallEndedByRemote && !(previous?.isCallEndedByRemote ?? false)) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Call ended by remote user')));
+        _endCall();
+      }
+      if (next.remoteUid != null && (previous?.remoteUid == null)) {
+        _startDurationTimer();
+      }
+    });
+    
+    final isConnected = agoraState.remoteUid != null;
+    final statusText = agoraState.errorMsg ?? (isConnected ? _formattedDuration : 'Calling...');
+
+    return PopScope(
+      canPop: _canPop,
+      onPopInvokedWithResult: (didPop, result) {
+        if (didPop) return;
+        _endCall();
+      },
+      child: Scaffold(
+        body: Container(
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: [
+              AppTheme.primaryColor.withOpacity(0.8),
+              Colors.black87,
+              Colors.black,
             ],
           ),
         ),
-      );
-    }
-
-    return Scaffold(
-      backgroundColor: Colors.grey.shade900,
-      body: SafeArea(
-        child: Column(
-          children: [
-            const SizedBox(height: 60),
-            const Text(
-              'Secure Audio Call',
-              style: TextStyle(fontSize: 22, color: Colors.white, fontWeight: FontWeight.bold),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              _remoteUid != null ? 'Connected' : 'Calling...',
-              style: const TextStyle(fontSize: 18, color: Colors.white70),
-            ),
-            Expanded(
-              child: Center(
-                child: CircleAvatar(
-                  radius: 80,
-                  backgroundColor: AppTheme.primaryColor,
-                  child: Text(
-                    widget.callerName.substring(0, 1).toUpperCase(),
-                    style: const TextStyle(fontSize: 60, color: Colors.white),
-                  ),
+        child: SafeArea(
+          child: Column(
+            children: [
+              const SizedBox(height: 50),
+              
+              // Caller Info
+              Center(
+                child: Column(
+                  children: [
+                    Container(
+                      width: 120,
+                      height: 120,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: Colors.white24,
+                        border: Border.all(color: Colors.white, width: 2),
+                      ),
+                      child: ClipOval(
+                        child: _remotePicBytes != null
+                            ? Image.memory(
+                                _remotePicBytes!,
+                                fit: BoxFit.cover,
+                                gaplessPlayback: true,
+                                errorBuilder: (c, e, s) => const Icon(Icons.person, size: 60, color: Colors.white),
+                              )
+                            : const Icon(Icons.person, size: 60, color: Colors.white),
+                      ),
+                    ),
+                    const SizedBox(height: 24),
+                    Text(
+                      _remoteName,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 24,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    if (!agoraState.isInitialized && agoraState.errorMsg == null)
+                      const Padding(
+                        padding: EdgeInsets.only(top: 8.0),
+                        child: SizedBox(
+                          height: 20,
+                          width: 20,
+                          child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2),
+                        ),
+                      )
+                    else
+                      Text(
+                        statusText,
+                        style: TextStyle(
+                          color: agoraState.errorMsg != null ? Colors.red : Colors.white70,
+                          fontSize: 16,
+                          fontWeight: agoraState.errorMsg != null ? FontWeight.bold : FontWeight.normal,
+                        ),
+                      ),
+                  ],
                 ),
               ),
-            ),
-            Container(
-              padding: const EdgeInsets.only(bottom: 40, top: 20),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                children: [
-                  _ControlButton(
-                    icon: _isMuted ? Icons.mic_off : Icons.mic,
-                    isActive: _isMuted,
-                    onTap: _toggleMicrophone,
+              
+              const Spacer(),
+              
+              // Controls
+              Container(
+                padding: const EdgeInsets.symmetric(vertical: 30, horizontal: 40),
+                decoration: const BoxDecoration(
+                  color: Colors.black45,
+                  borderRadius: BorderRadius.only(
+                    topLeft: Radius.circular(40),
+                    topRight: Radius.circular(40),
                   ),
-                  _ControlButton(
-                    icon: Icons.call_end,
-                    color: Colors.red,
-                    iconColor: Colors.white,
-                    onTap: () => Navigator.pop(context),
-                  ),
-                  _ControlButton(
-                    icon: _isSpeaker ? Icons.volume_up : Icons.volume_off,
-                    isActive: _isSpeaker,
-                    onTap: _toggleSpeaker,
-                  ),
-                ],
+                ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    _ControlButton(
+                      icon: agoraState.isMuted ? Icons.mic_off : Icons.mic,
+                      isActive: agoraState.isMuted,
+                      onTap: () => agoraNotifier.toggleMicrophone(),
+                    ),
+                    _ControlButton(
+                      icon: Icons.call_end,
+                      color: Colors.red,
+                      iconColor: Colors.white,
+                      size: 64,
+                      iconSize: 32,
+                      onTap: () => _endCall(),
+                    ),
+                    _SpeakerButton(agoraNotifier: agoraNotifier),
+                  ],
+                ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
+    ));
+  }
+}
+
+class _SpeakerButton extends StatefulWidget {
+  final AgoraService agoraNotifier;
+  const _SpeakerButton({required this.agoraNotifier});
+
+  @override
+  State<_SpeakerButton> createState() => _SpeakerButtonState();
+}
+
+class _SpeakerButtonState extends State<_SpeakerButton> {
+  bool _isSpeaker = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return _ControlButton(
+      icon: _isSpeaker ? Icons.volume_up : Icons.volume_down,
+      isActive: _isSpeaker,
+      onTap: () {
+        setState(() {
+          _isSpeaker = !_isSpeaker;
+        });
+        widget.agoraNotifier.setSpeakerphone(_isSpeaker);
+      },
     );
   }
 }
@@ -270,6 +333,8 @@ class _ControlButton extends StatelessWidget {
   final Color? color;
   final Color? iconColor;
   final bool isActive;
+  final double size;
+  final double iconSize;
 
   const _ControlButton({
     required this.icon,
@@ -277,6 +342,8 @@ class _ControlButton extends StatelessWidget {
     this.color,
     this.iconColor,
     this.isActive = false,
+    this.size = 56,
+    this.iconSize = 28,
   });
 
   @override
@@ -284,14 +351,15 @@ class _ControlButton extends StatelessWidget {
     return GestureDetector(
       onTap: onTap,
       child: Container(
-        padding: const EdgeInsets.all(18),
+        width: size,
+        height: size,
         decoration: BoxDecoration(
           color: color ?? (isActive ? Colors.white : Colors.white24),
           shape: BoxShape.circle,
         ),
         child: Icon(
           icon,
-          size: 32,
+          size: iconSize,
           color: iconColor ?? (isActive ? Colors.black : Colors.white),
         ),
       ),

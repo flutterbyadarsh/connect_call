@@ -37,18 +37,22 @@ dependencies:
   firebase_core: ^4.14.0
   firebase_auth: ^6.6.1
   cloud_firestore: ^6.9.0
+  cloud_functions: ^6.5.0
   agora_rtc_engine: ^6.6.4
   flutter_riverpod: ^2.5.1
   permission_handler: ^11.3.1
   image_picker: ^1.2.3
-  firebase_storage: ^13.5.0
   shared_preferences: ^2.5.5
   firebase_messaging: ^16.6.0
-  flutter_callkit_incoming: ^3.1.5
   uuid: ^4.6.0
   intl: ^0.20.3
   device_info_plus: ^13.2.0
   connectivity_plus: ^7.3.1
+  intl_phone_field: ^3.2.0
+  flutter_slidable: ^4.0.3
+  pip_view: ^0.9.7
+  path_provider: ^2.1.6
+  flutter_local_notifications: ^22.3.1
 
 dev_dependencies:
   flutter_test:

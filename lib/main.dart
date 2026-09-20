@@ -7,6 +7,7 @@ import 'services/auth_service.dart';
 import 'services/theme_service.dart';
 import 'services/call_service.dart';
 import 'screens/auth/login_screen.dart';
+import 'screens/auth/profile_setup_screen.dart';
 import 'screens/home/home_screen.dart';
 import 'firebase_options.dart';
 
@@ -15,7 +16,7 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
   debugPrint("Handling a background message: ${message.messageId}");
   if (message.data.isNotEmpty) {
-    CallService.showCallkitIncomingFromFCM(message.data);
+    await CallService.showBackgroundNotification(message);
   }
 }
 
@@ -70,6 +71,9 @@ class AuthWrapper extends ConsumerWidget {
     }
     
     if (authService.currentUser != null) {
+      if (authService.currentUser!.name.isEmpty || authService.currentUser!.name == 'User') {
+        return const ProfileSetupScreen();
+      }
       return const HomeScreen();
     }
     

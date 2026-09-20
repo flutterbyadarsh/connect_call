@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import '../../services/auth_service.dart';
 import '../../services/call_service.dart';
 import '../../services/theme_service.dart';
@@ -22,6 +23,15 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   void initState() {
     super.initState();
     CallService.startListeningForCalls();
+    
+    // Failsafe: Reset busy state when returning to Home
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final currentUser = ref.read(authServiceProvider).currentUser;
+      if (currentUser != null) {
+        FirebaseFirestore.instance.collection('users').doc(currentUser.uid).update({'isBusy': false})
+            .catchError((_) {});
+      }
+    });
   }
 
   final List<Widget> _tabs = [

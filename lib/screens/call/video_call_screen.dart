@@ -1,78 +1,63 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:agora_rtc_engine/agora_rtc_engine.dart';
-import 'package:permission_handler/permission_handler.dart';
 import 'package:device_info_plus/device_info_plus.dart';
 import 'dart:io';
 import 'dart:async';
+import 'package:pip_view/pip_view.dart';
+import '../../services/agora_service.dart';
+import '../../services/auth_service.dart';
+import '../home/home_screen.dart';
 
-const String appId = "fd5f9d592fc54c8d9623c27892c2a64b"; 
-const String token = "007eJxTYFh+bbfIpYKbvhaW3BdeS4bPDxHftPjM7XDTSQ3XbO5Ff3yvwJCWYppmmWJqaZSWbGqSbJFiaWZknGxkbmFplGyUaGaS9HjzsqyGQEaGx19PMzIyQCCIz8FQklpckpyYk8PAAACN1SSZ"; 
+class VideoCallScreen extends ConsumerStatefulWidget {
+  final String callerName; // This is now the Firestore callId (UUID)
+  final String agoraChannelId;
 
-class VideoCallScreen extends StatefulWidget {
-  final String callerName; // This is the Channel ID (Contact UID)
-  const VideoCallScreen({super.key, required this.callerName});
+  const VideoCallScreen({super.key, required this.callerName, required this.agoraChannelId});
 
   @override
-  State<VideoCallScreen> createState() => _VideoCallScreenState();
+  ConsumerState<VideoCallScreen> createState() => _VideoCallScreenState();
 }
 
-class _VideoCallScreenState extends State<VideoCallScreen> with WidgetsBindingObserver {
-  int? _remoteUid;
-  bool _localUserJoined = false;
-  RtcEngine? _engine;
-  bool _isEngineInitialized = false;
-
-  bool _isMuted = false;
-  bool _isVideoOff = false;
+class _VideoCallScreenState extends ConsumerState<VideoCallScreen> with WidgetsBindingObserver {
   bool _isEmulator = false;
-
-  String _networkQuality = 'Good';
-  Color _networkColor = Colors.green;
-  String? _errorMsg;
   Timer? _missedCallTimer;
   Key _videoKey = UniqueKey();
+  StreamSubscription? _callStatusSubscription;
+  bool _canPop = false;
+  
+  String _remoteName = 'Connecting...';
+  String _remotePic = '';
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    _checkDeviceAndInitAgora();
+    _initCall();
   }
 
-  Future<void> _checkDeviceAndInitAgora() async {
+  Future<void> _initCall() async {
     if (Platform.isAndroid) {
       final androidInfo = await DeviceInfoPlugin().androidInfo;
       _isEmulator = !androidInfo.isPhysicalDevice;
       debugPrint("Device is emulator: $_isEmulator");
     } else {
-      _isEmulator = false; // iOS physical or simulator (Texture view works on iOS simulator)
+      _isEmulator = false;
     }
-    await initAgora();
-  }
 
-  Future<void> initAgora() async {
-    final statuses = await [Permission.microphone, Permission.camera].request();
-    if (statuses[Permission.microphone] != PermissionStatus.granted || statuses[Permission.camera] != PermissionStatus.granted) {
-      if (mounted) {
-        await showDialog(
-          context: context,
-          builder: (ctx) => AlertDialog(
-            title: const Text('Permission Denied'),
-            content: const Text('Camera and Microphone permissions are required to make this call.'),
-            actions: [
-              TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('OK')),
-            ],
-          ),
-        );
-        if (mounted) Navigator.pop(context);
-      }
-      return;
-    }
+    // Initialize Agora non-blocking
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      ref.read(agoraServiceProvider.notifier).initAgora(
+        channelId: widget.agoraChannelId,
+        isVideo: true,
+      );
+    });
 
     // Missed call timer (45 seconds)
     _missedCallTimer = Timer(const Duration(seconds: 45), () async {
-      if (_remoteUid == null && mounted) {
+      final state = ref.read(agoraServiceProvider);
+      if (state.remoteUid == null && mounted) {
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Call Missed')));
         try {
           await FirebaseFirestore.instance.collection('calls').doc(widget.callerName).update({'status': 'missed'});
@@ -83,119 +68,50 @@ class _VideoCallScreenState extends State<VideoCallScreen> with WidgetsBindingOb
       }
     });
 
-    // Create and initialize engine
-    _engine = createAgoraRtcEngine();
-    await _engine!.initialize(const RtcEngineContext(
-      appId: appId,
-      channelProfile: ChannelProfileType.channelProfileCommunication,
-    ));
-
-    if (mounted) {
-      setState(() {
-        _isEngineInitialized = true;
-      });
-    }
-
-    _engine!.registerEventHandler(
-      RtcEngineEventHandler(
-        onJoinChannelSuccess: (RtcConnection connection, int elapsed) {
-          debugPrint("local user ${connection.localUid} joined");
-          setState(() {
-            _localUserJoined = true;
-          });
-        },
-        onUserJoined: (RtcConnection connection, int remoteUid, int elapsed) {
-          debugPrint("remote user $remoteUid joined");
-          if (mounted) {
-            setState(() {
-              _remoteUid = remoteUid;
-            });
-            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Call Connected')));
-            _missedCallTimer?.cancel();
-          }
-        },
-        onUserOffline: (RtcConnection connection, int remoteUid, UserOfflineReasonType reason) {
-          debugPrint("remote user $remoteUid left channel");
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Call ended')));
-            Navigator.pop(context);
-          }
-        },
-        onNetworkQuality: (RtcConnection connection, int remoteUid, QualityType txQuality, QualityType rxQuality) {
-          if (remoteUid == 0) {
-            int tx = txQuality.index;
-            int rx = rxQuality.index;
-            int worst = tx > rx ? tx : rx;
-            if (worst == 0) return;
-            
-            String quality = 'Good';
-            Color color = Colors.green;
-            if (worst == 3) {
-              quality = 'Fair';
-              color = Colors.orange;
-            } else if (worst >= 4) {
-              quality = 'Poor';
-              color = Colors.red;
-            }
-            
-            if (_networkQuality != quality) {
-              setState(() {
-                _networkQuality = quality;
-                _networkColor = color;
-              });
-            }
-          }
-        },
-        onError: (ErrorCodeType err, String msg) {
-          debugPrint('[Agora Error] $err : $msg');
-          if (mounted) {
-            setState(() {
-              _errorMsg = "Agora Error: ${err.name}";
-            });
-          }
-        },
-      ),
-    );
-
-    try {
-      await _engine!.enableVideo();
-      await _engine!.enableAudio();
-      await _engine!.startPreview();
-
-      // Join channel
-      await _engine!.joinChannel(
-        token: token,
-        channelId: 'testcall',
-        uid: 0,
-        options: const ChannelMediaOptions(
-          publishCameraTrack: true,
-          publishMicrophoneTrack: true,
-          autoSubscribeAudio: true,
-          autoSubscribeVideo: true,
-        ),
-      );
-      
-      // Set speakerphone MUST be called after joining channel or starting audio
-      await _engine!.setEnableSpeakerphone(true);
-    } catch (e) {
-      debugPrint("Agora Setup Error: $e");
-    }
-
     // Listen to call status changes from receiver (e.g. declined or ended)
-    FirebaseFirestore.instance
+    _callStatusSubscription = FirebaseFirestore.instance
         .collection('calls')
         .doc(widget.callerName)
-        .snapshots()
+        .snapshots(includeMetadataChanges: true)
         .listen((doc) {
+      if (doc.metadata.isFromCache) return; // Prevent popping immediately from local cache
+      
       if (doc.exists && mounted) {
         final status = doc.data()?['status'] as String?;
+        final state = ref.read(agoraServiceProvider);
+        
         if (status == 'declined') {
-          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('User rejected the call')));
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Call Declined')));
           Navigator.pop(context);
-        } else if (status == 'ended' && _remoteUid == null) {
-          // If receiver ends it before joining
+        } else if (status == 'ended') {
           ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Call Ended')));
           Navigator.pop(context);
+        } else if (status == 'accepted') {
+          _missedCallTimer?.cancel();
+        }
+        
+        final data = doc.data();
+        if (data != null) {
+           final currentUid = ref.read(authServiceProvider).currentUser?.uid;
+           if (currentUid != null) {
+              String newRemoteName = _remoteName;
+              String newRemotePic = _remotePic;
+              
+              if (data['callerId'] == currentUid) {
+                 newRemoteName = data['receiverName'] ?? 'Unknown';
+                 newRemotePic = data['receiverPic'] ?? '';
+              } else {
+                 newRemoteName = data['callerName'] ?? 'Unknown';
+                 newRemotePic = data['callerPic'] ?? '';
+              }
+              
+              if (newRemoteName != _remoteName || newRemotePic != _remotePic) {
+                 setState(() {
+                   _remoteName = newRemoteName;
+                   _remotePic = newRemotePic;
+                 });
+              }
+           }
         }
       }
     });
@@ -217,45 +133,45 @@ class _VideoCallScreenState extends State<VideoCallScreen> with WidgetsBindingOb
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _missedCallTimer?.cancel();
+    _callStatusSubscription?.cancel();
+    
     super.dispose();
-    _dispose();
   }
 
-  Future<void> _dispose() async {
-    if (_engine != null) {
-      await _engine!.leaveChannel();
-      await _engine!.release();
-    }
-    try {
-      await FirebaseFirestore.instance.collection('calls').doc(widget.callerName).update({
-        'status': 'ended',
+  void _endCall() {
+    if (_canPop) return;
+    
+    _callStatusSubscription?.cancel();
+    final notifier = ref.read(agoraServiceProvider.notifier);
+    
+    // Run in background without awaiting to prevent UI freeze
+    notifier.disposeEngine(widget.callerName);
+    
+    if (mounted) {
+      setState(() {
+        _canPop = true;
       });
-    } catch (e) {
-      debugPrint("Failed to update call status to ended: $e");
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          Navigator.of(context).pop();
+        }
+      });
     }
-  }
-
-  void _toggleMicrophone() {
-    setState(() {
-      _isMuted = !_isMuted;
-    });
-    _engine?.muteLocalAudioStream(_isMuted);
-  }
-
-  void _toggleCamera() {
-    setState(() {
-      _isVideoOff = !_isVideoOff;
-    });
-    _engine?.muteLocalVideoStream(_isVideoOff);
-  }
-
-  void _switchCamera() {
-    _engine?.switchCamera();
   }
 
   @override
   Widget build(BuildContext context) {
-    if (!_isEngineInitialized) {
+    final agoraState = ref.watch(agoraServiceProvider);
+    final agoraNotifier = ref.read(agoraServiceProvider.notifier);
+
+    ref.listen<AgoraState>(agoraServiceProvider, (previous, next) {
+      if (next.isCallEndedByRemote && !(previous?.isCallEndedByRemote ?? false)) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Call ended by remote user')));
+        _endCall();
+      }
+    });
+
+    if (!agoraState.isInitialized && agoraState.errorMsg == null) {
       return Scaffold(
         backgroundColor: Colors.black,
         body: Center(
@@ -264,32 +180,62 @@ class _VideoCallScreenState extends State<VideoCallScreen> with WidgetsBindingOb
             children: const [
               CircularProgressIndicator(color: Colors.white),
               SizedBox(height: 16),
-              Text('Initializing camera...', style: TextStyle(color: Colors.white)),
+              Text('Connecting securely...', style: TextStyle(color: Colors.white)),
             ],
           ),
         ),
       );
     }
 
-    return Scaffold(
-      backgroundColor: Colors.black,
-      body: Stack(
-        children: [
+    return PopScope(
+      canPop: _canPop,
+      onPopInvokedWithResult: (didPop, result) {
+        if (didPop) return;
+        _endCall();
+      },
+      child: PIPView(
+        builder: (context, isFloating) {
+          return Scaffold(
+            backgroundColor: Colors.black,
+            body: Stack(
+              children: [
           // Remote Video
           Center(
-            child: _remoteUid != null
-                ? AgoraVideoView(
-                    key: ValueKey('remote_${_videoKey.hashCode}'),
-                    controller: VideoViewController.remote(
-                      rtcEngine: _engine!,
-                      canvas: VideoCanvas(uid: _remoteUid),
-                      connection: const RtcConnection(channelId: 'testcall'),
-                      useFlutterTexture: _isEmulator,
+            child: agoraState.remoteUid != null
+                ? Container(
+                    decoration: BoxDecoration(
+                      border: agoraState.activeSpeakerUid == agoraState.remoteUid 
+                          ? Border.all(color: Colors.greenAccent, width: 4) 
+                          : null,
                     ),
+                    child: (agoraState.remoteVideoMuted
+                        ? Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: const [
+                              Icon(Icons.videocam_off, color: Colors.white54, size: 80),
+                              SizedBox(height: 16),
+                              Text(
+                                'Camera turned off',
+                                style: TextStyle(color: Colors.white70, fontSize: 16),
+                              ),
+                            ],
+                          )
+                        : AgoraVideoView(
+                            key: ValueKey('remote_${_videoKey.hashCode}'),
+                            controller: VideoViewController.remote(
+                              rtcEngine: agoraNotifier.engine!,
+                              canvas: VideoCanvas(uid: agoraState.remoteUid!),
+                              connection: RtcConnection(channelId: widget.agoraChannelId),
+                              useFlutterTexture: _isEmulator,
+                            ),
+                          )),
                   )
                 : Text(
-                    _errorMsg ?? 'Calling...',
-                    style: TextStyle(color: _errorMsg != null ? Colors.red : Colors.white, fontWeight: _errorMsg != null ? FontWeight.bold : FontWeight.normal),
+                    agoraState.errorMsg ?? 'Calling...',
+                    style: TextStyle(
+                      color: agoraState.errorMsg != null ? Colors.red : Colors.white,
+                      fontWeight: agoraState.errorMsg != null ? FontWeight.bold : FontWeight.normal,
+                    ),
                     textAlign: TextAlign.center,
                   ),
           ),
@@ -305,9 +251,9 @@ class _VideoCallScreenState extends State<VideoCallScreen> with WidgetsBindingOb
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        const Text(
-                          'Secure Video Call',
-                          style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
+                        Text(
+                          _remoteName,
+                          style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
                         ),
                         const SizedBox(height: 8),
                       Container(
@@ -319,9 +265,9 @@ class _VideoCallScreenState extends State<VideoCallScreen> with WidgetsBindingOb
                         child: Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
-                            Icon(Icons.signal_cellular_alt, color: _networkColor, size: 16),
+                            Icon(Icons.signal_cellular_alt, color: agoraState.networkColor, size: 16),
                             const SizedBox(width: 4),
-                            Text('Network: $_networkQuality', style: TextStyle(color: _networkColor, fontSize: 12, fontWeight: FontWeight.bold)),
+                            Text('Network: ${agoraState.networkQuality}', style: TextStyle(color: agoraState.networkColor, fontSize: 12, fontWeight: FontWeight.bold)),
                           ],
                         ),
                       ),
@@ -333,18 +279,19 @@ class _VideoCallScreenState extends State<VideoCallScreen> with WidgetsBindingOb
             ),
           ),
           
-          // Local Camera Preview Overlay
-          Positioned(
+          // Local Camera Preview Overlay (Hide in PiP)
+          if (!isFloating)
+            Positioned(
             right: 16,
             bottom: 120,
             child: SizedBox(
               width: 100,
               height: 150,
-              child: !_isVideoOff
+              child: !agoraState.isVideoOff && agoraNotifier.engine != null
                   ? AgoraVideoView(
                       key: ValueKey('local_${_videoKey.hashCode}'),
                       controller: VideoViewController(
-                        rtcEngine: _engine!,
+                        rtcEngine: agoraNotifier.engine!,
                         canvas: const VideoCanvas(uid: 0),
                         useFlutterTexture: _isEmulator,
                       ),
@@ -359,11 +306,12 @@ class _VideoCallScreenState extends State<VideoCallScreen> with WidgetsBindingOb
             ),
           ),
           
-          // Floating Control Bar
-          Positioned(
-            left: 16,
-            right: 16,
-            bottom: 30,
+          // Floating Control Bar (Hide in PiP)
+          if (!isFloating)
+            Positioned(
+              left: 16,
+              right: 16,
+              bottom: 30,
             child: Container(
               padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 20),
               decoration: BoxDecoration(
@@ -374,24 +322,35 @@ class _VideoCallScreenState extends State<VideoCallScreen> with WidgetsBindingOb
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
                   _ControlButton(
-                    icon: _isMuted ? Icons.mic_off : Icons.mic,
-                    isActive: _isMuted,
-                    onTap: _toggleMicrophone,
+                    icon: agoraState.isMuted ? Icons.mic_off : Icons.mic,
+                    isActive: agoraState.isMuted,
+                    onTap: () => agoraNotifier.toggleMicrophone(),
                   ),
                   _ControlButton(
                     icon: Icons.flip_camera_ios,
-                    onTap: _switchCamera,
+                    onTap: () => agoraNotifier.switchCamera(),
                   ),
                   _ControlButton(
-                    icon: _isVideoOff ? Icons.videocam_off : Icons.videocam,
-                    isActive: _isVideoOff,
-                    onTap: _toggleCamera,
+                    icon: agoraState.isVideoOff ? Icons.videocam_off : Icons.videocam,
+                    isActive: agoraState.isVideoOff,
+                    onTap: () => agoraNotifier.toggleCamera(),
+                  ),
+                  _ControlButton(
+                    icon: Icons.blur_on,
+                    isActive: agoraState.isBlurEnabled,
+                    onTap: () => agoraNotifier.toggleBlur(),
+                  ),
+                  _ControlButton(
+                    icon: Icons.picture_in_picture_alt,
+                    onTap: () {
+                      PIPView.of(context)?.presentBelow(const HomeScreen());
+                    },
                   ),
                   _ControlButton(
                     icon: Icons.call_end,
                     color: Colors.red,
                     iconColor: Colors.white,
-                    onTap: () => Navigator.pop(context),
+                    onTap: () => _endCall(),
                   ),
                 ],
               ),
@@ -400,6 +359,7 @@ class _VideoCallScreenState extends State<VideoCallScreen> with WidgetsBindingOb
         ],
       ),
     );
+  }));
   }
 }
 

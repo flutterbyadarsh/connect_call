@@ -4,12 +4,16 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:uuid/uuid.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:intl_phone_field/intl_phone_field.dart';
 import '../../services/auth_service.dart';
 import '../../services/user_service.dart';
 import '../../models/user_model.dart';
 import '../../widgets/user_tile.dart';
 import '../call/audio_call_screen.dart';
 import '../call/video_call_screen.dart';
+import 'package:flutter_slidable/flutter_slidable.dart';
+import 'dart:convert';
 
 class ContactsTab extends ConsumerStatefulWidget {
   const ContactsTab({super.key});
@@ -20,8 +24,12 @@ class ContactsTab extends ConsumerStatefulWidget {
 
 class _ContactsTabState extends ConsumerState<ContactsTab> {
   String _searchQuery = '';
+  bool _isStartingCall = false;
 
   Future<void> _startCall(BuildContext context, UserModel receiver, bool isVideo) async {
+    if (_isStartingCall) return;
+    setState(() => _isStartingCall = true);
+    
     final caller = ref.read(authServiceProvider).currentUser;
     if (caller == null) return;
     
@@ -41,28 +49,71 @@ class _ContactsTabState extends ConsumerState<ContactsTab> {
       }
       return;
     }
+    final callId = const Uuid().v4(); // Unique document ID for Firestore
     
-    final callId = const Uuid().v4(); // Generate a unique channel ID
+    // Generate a deterministic channel ID for Agora based on sorted UIDs
+    final agoraChannelId = caller.uid.compareTo(receiver.uid) < 0 
+        ? '${caller.uid}_${receiver.uid}' 
+        : '${receiver.uid}_${caller.uid}';
 
-    // Create a call document to trigger the Cloud Function
-    await FirebaseFirestore.instance.collection('calls').doc(callId).set({
-      'callerId': caller.uid,
-      'callerName': caller.name,
-      'callerPic': caller.profileImageUrl,
-      'receiverId': receiver.uid,
-      'receiverName': receiver.name,
-      'receiverPic': receiver.profileImageUrl,
-      'isVideo': isVideo,
-      'status': 'ringing',
-      'timestamp': FieldValue.serverTimestamp(),
-    });
+    try {
+      await FirebaseFirestore.instance.runTransaction((transaction) async {
+        final receiverRef = FirebaseFirestore.instance.collection('users').doc(receiver.uid);
+        final callerRef = FirebaseFirestore.instance.collection('users').doc(caller.uid);
+        
+        final receiverSnapshot = await transaction.get(receiverRef);
+        
+        if (!receiverSnapshot.exists) {
+          throw Exception("Receiver not found");
+        }
+        
+        if (receiverSnapshot.data()?['isBusy'] == true) {
+          throw Exception("busy");
+        }
+        
+        // Mark both users as busy
+        transaction.update(receiverRef, {'isBusy': true});
+        transaction.update(callerRef, {'isBusy': true});
+        
+        // Create the call document
+        final callRef = FirebaseFirestore.instance.collection('calls').doc(callId);
+        transaction.set(callRef, {
+          'callerId': caller.uid,
+          'callerName': caller.name,
+          'callerPic': caller.profileImageUrl,
+          'receiverId': receiver.uid,
+          'receiverName': receiver.name,
+          'receiverPic': receiver.profileImageUrl,
+          'agoraChannelId': agoraChannelId, // Store the deterministic ID
+          'isVideo': isVideo,
+          'status': 'ringing',
+          'timestamp': FieldValue.serverTimestamp(),
+        });
+      });
+    } catch (e) {
+      if (context.mounted) {
+        if (e.toString().contains("busy")) {
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('User is busy on another call.')));
+          // Optionally add a missed call log here
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Call failed: $e')));
+        }
+      }
+      return;
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isStartingCall = false;
+        });
+      }
+    }
 
     if (!context.mounted) return;
 
     if (isVideo) {
-      Navigator.push(context, MaterialPageRoute(builder: (_) => VideoCallScreen(callerName: callId)));
+      Navigator.push(context, MaterialPageRoute(builder: (_) => VideoCallScreen(callerName: callId, agoraChannelId: agoraChannelId)));
     } else {
-      Navigator.push(context, MaterialPageRoute(builder: (_) => AudioCallScreen(callerName: callId)));
+      Navigator.push(context, MaterialPageRoute(builder: (_) => AudioCallScreen(callerName: callId, agoraChannelId: agoraChannelId)));
     }
   }
 
@@ -77,8 +128,10 @@ class _ContactsTabState extends ConsumerState<ContactsTab> {
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      builder: (ctx) => StatefulBuilder(
-        builder: (context, setState) {
+      builder: (ctx) {
+        String completePhoneNumber = '';
+        return StatefulBuilder(
+          builder: (context, setState) {
           return Container(
             decoration: BoxDecoration(
               color: Theme.of(ctx).scaffoldBackgroundColor,
@@ -102,13 +155,10 @@ class _ContactsTabState extends ConsumerState<ContactsTab> {
                   ],
                 ),
                 const SizedBox(height: 16),
-                TextField(
-                  controller: phoneCtrl,
+                IntlPhoneField(
                   autofocus: true, 
-                  keyboardType: TextInputType.phone,
                   decoration: InputDecoration(
                     hintText: 'Enter Phone Number',
-                    prefixIcon: const Icon(Icons.phone_outlined),
                     border: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(16),
                       borderSide: BorderSide.none,
@@ -117,6 +167,10 @@ class _ContactsTabState extends ConsumerState<ContactsTab> {
                     fillColor: Theme.of(ctx).colorScheme.surface,
                     errorText: errorMsg,
                   ),
+                  initialCountryCode: 'IN',
+                  onChanged: (phone) {
+                    completePhoneNumber = phone.completeNumber;
+                  },
                 ),
                 const SizedBox(height: 24),
                 ElevatedButton(
@@ -128,15 +182,9 @@ class _ContactsTabState extends ConsumerState<ContactsTab> {
                   ),
                   onPressed: () async {
                     setState(() => errorMsg = null);
-                    final phone = phoneCtrl.text.trim();
+                    final phone = completePhoneNumber;
                     if (phone.isEmpty) {
                       setState(() => errorMsg = 'Please enter a phone number');
-                      return;
-                    }
-                    
-                    final phoneRegex = RegExp(r'^\d{10}$');
-                    if (!phoneRegex.hasMatch(phone)) {
-                      setState(() => errorMsg = 'Please enter a valid 10-digit phone number');
                       return;
                     }
 
@@ -159,8 +207,9 @@ class _ContactsTabState extends ConsumerState<ContactsTab> {
               ],
             ),
           );
-        }
-      ),
+        },
+      );
+      },
     );
   }
 
@@ -205,6 +254,64 @@ class _ContactsTabState extends ConsumerState<ContactsTab> {
           ),
           if (userService.isLoading) 
             const LinearProgressIndicator(),
+          if (filteredUsers.any((u) => u.isOnline))
+            Container(
+              height: 100,
+              padding: const EdgeInsets.symmetric(vertical: 8),
+              child: ListView(
+                scrollDirection: Axis.horizontal,
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                children: filteredUsers.where((u) => u.isOnline).map((user) {
+                  return GestureDetector(
+                    onTap: () => _startVideoCall(context, user),
+                    child: Container(
+                      width: 72,
+                      margin: const EdgeInsets.only(right: 12),
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Stack(
+                            children: [
+                              CircleAvatar(
+                                radius: 28,
+                                backgroundColor: Theme.of(context).primaryColor.withOpacity(0.1),
+                                backgroundImage: user.profileImageUrl.isNotEmpty 
+                                    ? MemoryImage(base64Decode(user.profileImageUrl.split(',').last)) 
+                                    : null,
+                                child: user.profileImageUrl.isEmpty 
+                                    ? Text(user.name.isNotEmpty ? user.name[0].toUpperCase() : '?', style: TextStyle(color: Theme.of(context).primaryColor, fontSize: 20))
+                                    : null,
+                              ),
+                              Positioned(
+                                right: 0,
+                                bottom: 0,
+                                child: Container(
+                                  width: 14,
+                                  height: 14,
+                                  decoration: BoxDecoration(
+                                    color: Colors.green,
+                                    shape: BoxShape.circle,
+                                    border: Border.all(color: Theme.of(context).scaffoldBackgroundColor, width: 2),
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            user.name,
+                            style: const TextStyle(fontSize: 12),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            textAlign: TextAlign.center,
+                          ),
+                        ],
+                      ),
+                    ),
+                  );
+                }).toList(),
+              ),
+            ),
           Expanded(
             child: filteredUsers.isEmpty
                 ? Center(
@@ -218,21 +325,41 @@ class _ContactsTabState extends ConsumerState<ContactsTab> {
                     separatorBuilder: (context, index) => const Divider(height: 1),
                     itemBuilder: (context, index) {
                       final user = filteredUsers[index];
-                      return Dismissible(
+                      return Slidable(
                         key: Key(user.uid),
-                        direction: DismissDirection.endToStart,
-                        background: Container(
-                          color: Colors.red,
-                          alignment: Alignment.centerRight,
-                          padding: const EdgeInsets.only(right: 20),
-                          child: const Icon(Icons.delete, color: Colors.white),
+                        startActionPane: ActionPane(
+                          motion: const ScrollMotion(),
+                          children: [
+                            SlidableAction(
+                              onPressed: (context) => _startAudioCall(context, user),
+                              backgroundColor: Colors.green,
+                              foregroundColor: Colors.white,
+                              icon: Icons.call,
+                              label: 'Call',
+                            ),
+                            SlidableAction(
+                              onPressed: (context) => _startVideoCall(context, user),
+                              backgroundColor: Colors.blue,
+                              foregroundColor: Colors.white,
+                              icon: Icons.videocam,
+                              label: 'Video',
+                            ),
+                          ],
                         ),
-                        onDismissed: (direction) {
-                          userService.deleteContact(user.uid);
-                        },
+                        endActionPane: ActionPane(
+                          motion: const ScrollMotion(),
+                          children: [
+                            SlidableAction(
+                              onPressed: (context) => userService.deleteContact(user.uid),
+                              backgroundColor: Colors.red,
+                              foregroundColor: Colors.white,
+                              icon: Icons.delete,
+                              label: 'Delete',
+                            ),
+                          ],
+                        ),
                         child: UserTile(
                           user: user,
-                          // Passing UID as channel name for Agora to connect
                           onAudioCall: () => _startAudioCall(context, user),
                           onVideoCall: () => _startVideoCall(context, user),
                         ),

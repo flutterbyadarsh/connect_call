@@ -1,1 +1,43 @@
-{"flutter":{"platforms":{"android":{"default":{"projectId":"connect-call-ed891","appId":"1:762024660581:android:88feaa4133e0e18b79408c","fileOutput":"android/app/google-services.json"}},"ios":{"default":{"projectId":"connect-call-ed891","appId":"1:762024660581:ios:aa245345449d9a1979408c","uploadDebugSymbols":false,"fileOutput":"ios/Runner/GoogleService-Info.plist"}},"dart":{"lib/firebase_options.dart":{"projectId":"connect-call-ed891","configurations":{"android":"1:762024660581:android:88feaa4133e0e18b79408c","ios":"1:762024660581:ios:aa245345449d9a1979408c"}}}}},"functions":{"source":"functions","ignore":["node_modules/**",".git/**","firebase-debug.log","firebase-debug.*.log"]}}
+{
+  "flutter": {
+    "platforms": {
+      "android": {
+        "default": {
+          "projectId": "connect-call-ed891",
+          "appId": "1:762024660581:android:88feaa4133e0e18b79408c",
+          "fileOutput": "android/app/google-services.json"
+        }
+      },
+      "ios": {
+        "default": {
+          "projectId": "connect-call-ed891",
+          "appId": "1:762024660581:ios:aa245345449d9a1979408c",
+          "uploadDebugSymbols": false,
+          "fileOutput": "ios/Runner/GoogleService-Info.plist"
+        }
+      },
+      "dart": {
+        "lib/firebase_options.dart": {
+          "projectId": "connect-call-ed891",
+          "configurations": {
+            "android": "1:762024660581:android:88feaa4133e0e18b79408c",
+            "ios": "1:762024660581:ios:aa245345449d9a1979408c"
+          }
+        }
+      }
+    }
+  },
+  "functions": {
+    "source": "functions",
+    "ignore": ["node_modules/**", ".git/**", "firebase-debug.log", "firebase-debug.*.log"]
+  },
+  "emulators": {
+    "auth": {
+      "port": 9099
+    },
+    "ui": {
+      "enabled": true,
+      "port": 4000
+    }
+  }
+}

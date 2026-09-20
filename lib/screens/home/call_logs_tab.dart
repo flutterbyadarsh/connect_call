@@ -9,11 +9,18 @@ import '../../core/theme/app_theme.dart';
 import '../call/audio_call_screen.dart';
 import '../call/video_call_screen.dart';
 
-class CallLogsTab extends ConsumerWidget {
+class CallLogsTab extends ConsumerStatefulWidget {
   const CallLogsTab({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<CallLogsTab> createState() => _CallLogsTabState();
+}
+
+class _CallLogsTabState extends ConsumerState<CallLogsTab> {
+  bool _isStartingCall = false;
+
+  @override
+  Widget build(BuildContext context) {
     final user = ref.read(authServiceProvider).currentUser;
     if (user == null) {
       return const Center(child: Text('Not logged in'));
@@ -79,6 +86,27 @@ class CallLogsTab extends ConsumerWidget {
                 ? DateFormat('MMM d, h:mm a').format(timestamp.toDate()) 
                 : 'Just now';
 
+            final status = data['status'] as String?;
+            final duration = data['duration'] as int? ?? 0;
+            
+            // It's a missed call if status is explicitly 'missed', or if it was ended with 0 duration and it was incoming.
+            final isMissed = status == 'missed' || (!isOutgoing && status == 'ended' && duration == 0);
+            
+            String durationStr = '';
+            if (duration > 0) {
+              final mins = duration ~/ 60;
+              final secs = duration % 60;
+              durationStr = mins > 0 ? ' • $mins m $secs s' : ' • $secs s';
+            } else if (isMissed) {
+              durationStr = ' • Missed';
+            } else {
+              durationStr = ' • 0 s';
+            }
+
+            final iconColor = isMissed 
+                ? Colors.red 
+                : (isOutgoing ? Colors.green : Colors.blue);
+
             return ListTile(
               contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
               leading: CircleAvatar(
@@ -98,34 +126,51 @@ class CallLogsTab extends ConsumerWidget {
               subtitle: Row(
                 children: [
                   Icon(
-                    isOutgoing ? Icons.call_made : Icons.call_received,
+                    isMissed ? Icons.call_missed : (isOutgoing ? Icons.call_made : Icons.call_received),
                     size: 16,
-                    color: isOutgoing ? Colors.green : Colors.blue,
+                    color: iconColor,
                   ),
                   const SizedBox(width: 4),
-                  Text(dateStr, style: TextStyle(color: Theme.of(context).textTheme.bodyMedium?.color)),
+                  Text('$dateStr$durationStr', style: TextStyle(
+                    color: isMissed ? Colors.red.shade300 : Theme.of(context).textTheme.bodyMedium?.color,
+                  )),
                 ],
               ),
               trailing: IconButton(
                 icon: Icon(isVideo ? Icons.videocam : Icons.call, color: Theme.of(context).primaryColor),
                 onPressed: () async {
-                  final callId = Uuid().v4();
-                  await FirebaseFirestore.instance.collection('calls').doc(callId).set({
-                    'callerId': user.uid,
-                    'callerName': user.name,
-                    'callerPic': user.profileImageUrl,
-                    'receiverId': otherId,
-                    'receiverName': otherName,
-                    'receiverPic': otherPic,
-                    'isVideo': isVideo,
-                    'timestamp': FieldValue.serverTimestamp(),
-                  });
+                  if (_isStartingCall) return;
+                  setState(() => _isStartingCall = true);
                   
-                  if (!context.mounted) return;
-                  if (isVideo) {
-                    Navigator.push(context, MaterialPageRoute(builder: (_) => VideoCallScreen(callerName: callId)));
-                  } else {
-                    Navigator.push(context, MaterialPageRoute(builder: (_) => AudioCallScreen(callerName: callId)));
+                  try {
+                    final callId = const Uuid().v4();
+                    final agoraChannelId = user.uid.compareTo(otherId) < 0
+                        ? '${user.uid}_$otherId'
+                        : '${otherId}_${user.uid}';
+
+                    await FirebaseFirestore.instance.collection('calls').doc(callId).set({
+                      'callerId': user.uid,
+                      'callerName': user.name,
+                      'callerPic': user.profileImageUrl,
+                      'receiverId': otherId,
+                      'receiverName': otherName,
+                      'receiverPic': otherPic,
+                      'agoraChannelId': agoraChannelId,
+                      'status': 'ringing',
+                      'isVideo': isVideo,
+                      'timestamp': FieldValue.serverTimestamp(),
+                    });
+                    
+                    if (!context.mounted) return;
+                    if (isVideo) {
+                      Navigator.push(context, MaterialPageRoute(builder: (_) => VideoCallScreen(callerName: callId, agoraChannelId: agoraChannelId)));
+                    } else {
+                      Navigator.push(context, MaterialPageRoute(builder: (_) => AudioCallScreen(callerName: callId, agoraChannelId: agoraChannelId)));
+                    }
+                  } finally {
+                    if (mounted) {
+                      setState(() => _isStartingCall = false);
+                    }
                   }
                 },
               ),

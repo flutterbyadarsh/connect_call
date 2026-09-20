@@ -6,6 +6,7 @@ class UserModel {
   final String about;
   final String profileImageUrl;
   final bool isOnline;
+  final bool isBusy;
   final String? fcmToken;
 
   UserModel({
@@ -16,6 +17,7 @@ class UserModel {
     this.about = "Hey there! I am using ConnectCall.",
     this.profileImageUrl = "",
     this.isOnline = true,
+    this.isBusy = false,
     this.fcmToken,
   });
 
@@ -28,6 +30,7 @@ class UserModel {
       about: data['about'] ?? "Hey there! I am using ConnectCall.",
       profileImageUrl: data['profileImageUrl'] ?? '',
       isOnline: data['isOnline'] ?? false,
+      isBusy: data['isBusy'] ?? false,
       fcmToken: data['fcmToken'],
     );
   }
@@ -40,6 +43,7 @@ class UserModel {
       'about': about,
       'profileImageUrl': profileImageUrl,
       'isOnline': isOnline,
+      'isBusy': isBusy,
       'fcmToken': fcmToken,
     };
   }

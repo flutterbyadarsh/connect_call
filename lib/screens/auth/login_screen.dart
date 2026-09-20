@@ -1,7 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../services/auth_service.dart';
-import 'register_screen.dart';
+import 'phone_login_screen.dart';
+import 'signup_screen.dart';
 
 class LoginScreen extends ConsumerStatefulWidget {
   const LoginScreen({super.key});
@@ -12,42 +13,35 @@ class LoginScreen extends ConsumerStatefulWidget {
 
 class _LoginScreenState extends ConsumerState<LoginScreen> {
   final _emailCtrl = TextEditingController();
-  final _passCtrl = TextEditingController();
+  final _passwordCtrl = TextEditingController();
   bool _isLoading = false;
 
   @override
   void dispose() {
     _emailCtrl.dispose();
-    _passCtrl.dispose();
+    _passwordCtrl.dispose();
     super.dispose();
   }
 
   void _login() async {
     final email = _emailCtrl.text.trim();
-    final pass = _passCtrl.text.trim();
+    final password = _passwordCtrl.text.trim();
     
-    if (email.isEmpty || pass.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Please enter email and password')));
-      return;
-    }
-    
-    final emailRegex = RegExp(r'^[\w-\.]+@([\w-]+\.)+[\w-]{2,4}$');
-    if (!emailRegex.hasMatch(email)) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Please enter a valid email address')));
+    if (email.isEmpty || password.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Please enter both email and password')));
       return;
     }
     
     setState(() => _isLoading = true);
     final auth = ref.read(authServiceProvider.notifier);
-    final success = await auth.login(_emailCtrl.text, _passCtrl.text);
+    
+    final success = await auth.signInWithEmailPassword(email, password);
     
     if (!mounted) return;
     setState(() => _isLoading = false);
     
     if (!success) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Login failed')),
-      );
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Login failed. Please check your credentials.')));
     }
   }
 
@@ -71,20 +65,27 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                 ),
                 const SizedBox(height: 8),
                 const Text(
-                  'Connect with anyone, anywhere.',
+                  'Login to continue',
                   textAlign: TextAlign.center,
                   style: TextStyle(color: Colors.grey, fontSize: 16),
                 ),
                 const SizedBox(height: 48),
                 TextField(
                   controller: _emailCtrl,
-                  decoration: const InputDecoration(labelText: 'Email', prefixIcon: Icon(Icons.email_outlined)),
+                  decoration: const InputDecoration(
+                    labelText: 'Email', 
+                    hintText: 'john@example.com',
+                    prefixIcon: Icon(Icons.email_outlined)
+                  ),
                   keyboardType: TextInputType.emailAddress,
                 ),
                 const SizedBox(height: 16),
                 TextField(
-                  controller: _passCtrl,
-                  decoration: const InputDecoration(labelText: 'Password', prefixIcon: Icon(Icons.lock_outline)),
+                  controller: _passwordCtrl,
+                  decoration: const InputDecoration(
+                    labelText: 'Password',
+                    prefixIcon: Icon(Icons.lock_outline)
+                  ),
                   obscureText: true,
                 ),
                 const SizedBox(height: 24),
@@ -97,9 +98,19 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                 const SizedBox(height: 16),
                 TextButton(
                   onPressed: () {
-                    Navigator.push(context, MaterialPageRoute(builder: (_) => const RegisterScreen()));
+                    Navigator.push(context, MaterialPageRoute(builder: (_) => const SignUpScreen()));
                   },
-                  child: const Text('Don\'t have an account? Sign up'),
+                  child: const Text("Don't have an account? Sign Up"),
+                ),
+                const SizedBox(height: 16),
+                const Divider(),
+                const SizedBox(height: 16),
+                OutlinedButton.icon(
+                  onPressed: () {
+                    Navigator.push(context, MaterialPageRoute(builder: (_) => const PhoneLoginScreen()));
+                  },
+                  icon: const Icon(Icons.phone),
+                  label: const Text('Continue with Phone Number'),
                 ),
               ],
             ),
