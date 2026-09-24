@@ -17,7 +17,7 @@ class AgoraTokenService {
 
       final result = await callable
           .call({'channelName': channelName, 'uid': uid})
-          .timeout(const Duration(seconds: 3));
+          .timeout(const Duration(seconds: 15));
 
       final token = result.data['token'] as String;
       final appId = result.data['appId'] as String;
@@ -37,8 +37,10 @@ class AgoraTokenService {
       debugPrint(
         '⚠️ [AgoraTokenService] Retry failed. Falling back to empty token to prevent crash.',
       );
-      // Fallback to empty token so Agora engine can still initialize (if App is in testing mode)
-      return {'token': '', 'appId': ''};
+      // Fallback: return empty token — Agora will reject join but at least
+      // the engine won't crash with error 101 (invalid appId).
+      // The Firestore status listener will end the call gracefully.
+      return {'token': '', 'appId': '99082f23cb0047f8893f5b8ac23d50a7'};
     }
   }
 }
