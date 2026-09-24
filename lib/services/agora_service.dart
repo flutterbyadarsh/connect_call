@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:agora_rtc_engine/agora_rtc_engine.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:connect_call/core/agora_config.dart';
 import 'package:flutter_callkit_incoming/flutter_callkit_incoming.dart';
 import 'dart:async';
 import 'dart:convert';
@@ -402,19 +403,17 @@ class AgoraService extends StateNotifier<AgoraState> {
         return;
       }
 
-      final agoraData = await AgoraTokenService.getToken(channelId);
-      final dynamicToken = agoraData['token']!;
-      final backendAppId = agoraData['appId']!;
+      // BYPASS .env FOR PRODUCTION LAUNCH - STRICT FALLBACK
+      final finalAppId = AgoraConfig.appId;
+      final dynamicToken = AgoraConfig.rtcToken;
 
-      final finalAppId = backendAppId.isNotEmpty ? backendAppId : _kAgoraAppId;
-
-      if (finalAppId.isEmpty) {
+      if (finalAppId.isEmpty || finalAppId.length != 32) {
         debugPrint(
-          "❌ [AgoraService] Aborting: App ID is empty. Cannot initialize.",
+          "❌ [AgoraService] Aborting: AgoraConfig.appId is empty or invalid. Cannot initialize.",
         );
         state = state.copyWith(
           isInitializing: false,
-          errorMsg: 'Configuration error: App ID missing.',
+          errorMsg: 'Configuration error: App ID missing or invalid.',
         );
         endCallSession(updateStatus: false);
         return;
