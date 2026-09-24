@@ -754,6 +754,11 @@ class AgoraService extends StateNotifier<AgoraState> {
           _engine!.leaveChannel(),
           _engine!.stopPreview(),
         ]).timeout(const Duration(seconds: 2));
+      } catch (e) {
+        debugPrint("Error leaving Agora channel: $e");
+      }
+
+      try {
         await _engine!.release();
       } catch (e) {
         debugPrint("Error releasing Agora engine: $e");
