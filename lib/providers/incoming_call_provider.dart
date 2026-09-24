@@ -36,6 +36,7 @@ class IncomingCallNotifier extends StateNotifier<IncomingCallState?> {
   }
 }
 
-final incomingCallProvider = StateNotifierProvider<IncomingCallNotifier, IncomingCallState?>((ref) {
-  return IncomingCallNotifier();
-});
+final incomingCallProvider =
+    StateNotifierProvider<IncomingCallNotifier, IncomingCallState?>((ref) {
+      return IncomingCallNotifier();
+    });

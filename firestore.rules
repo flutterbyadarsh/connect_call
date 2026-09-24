@@ -1,0 +1,52 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Only authenticated users can access the database
+    match /{document=**} {
+      allow read, write: if false; // Default deny
+    }
+
+    match /users/{userId} {
+      // Anyone authenticated can read user profiles
+      allow read: if request.auth != null;
+      // Users can only write to their own profile
+      allow write: if request.auth != null && request.auth.uid == userId;
+      
+      match /contacts/{contactId} {
+        // Only the owner can read/write their contacts
+        allow read, write: if request.auth != null && request.auth.uid == userId;
+      }
+
+      match /chats/{chatId} {
+        // Users can read/write their own chat list
+        allow read, write: if request.auth != null && request.auth.uid == userId;
+      }
+    }
+
+    match /calls/{callId} {
+      // Read/Update: only caller or receiver
+      allow read, update: if request.auth != null && 
+        (resource.data.callerId == request.auth.uid || resource.data.receiverId == request.auth.uid);
+      // Create: user must be the caller
+      allow create: if request.auth != null && request.resource.data.callerId == request.auth.uid;
+      // Delete: only caller or receiver
+      allow delete: if request.auth != null && 
+        (resource.data.callerId == request.auth.uid || resource.data.receiverId == request.auth.uid);
+    }
+
+    match /chats/{chatId} {
+      // We assume chatId is derived from user IDs (e.g., uid1_uid2) 
+      // or we just allow users to read/write if their ID is part of the chatId or document.
+      // Since we don't have the exact chat creation structure, a common approach is allowing read/write if their uid is in participants.
+      // If we don't have a participants array on the chat document itself, we can check if the chat ID contains the uid.
+      allow read, write: if request.auth != null && (chatId.matches('.*' + request.auth.uid + '.*') || (resource != null && request.auth.uid in resource.data.participants));
+
+      match /messages/{messageId} {
+        allow read: if request.auth != null && (chatId.matches('.*' + request.auth.uid + '.*'));
+        allow create: if request.auth != null && (chatId.matches('.*' + request.auth.uid + '.*')) && request.resource.data.sender_id == request.auth.uid;
+        allow update, delete: if request.auth != null && (chatId.matches('.*' + request.auth.uid + '.*')) && resource.data.sender_id == request.auth.uid;
+      }
+    }
+  }
+}

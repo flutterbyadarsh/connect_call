@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:intl_phone_field/intl_phone_field.dart';
 import '../../services/auth_service.dart';
+import '../../core/utils/error_handler.dart';
 
 class ProfileSetupScreen extends ConsumerStatefulWidget {
   const ProfileSetupScreen({super.key});
@@ -12,9 +13,12 @@ class ProfileSetupScreen extends ConsumerStatefulWidget {
 }
 
 class _ProfileSetupScreenState extends ConsumerState<ProfileSetupScreen> {
+  final _formKey = GlobalKey<FormState>();
   final _nameCtrl = TextEditingController();
   String _completePhoneNumber = '';
-  final _aboutCtrl = TextEditingController(text: "Hey there! I am using ConnectCall.");
+  final _aboutCtrl = TextEditingController(
+    text: "Hey there! I am using ConnectCall.",
+  );
   bool _isLoading = false;
   bool _needsPhoneNumber = false;
 
@@ -40,36 +44,34 @@ class _ProfileSetupScreenState extends ConsumerState<ProfileSetupScreen> {
   }
 
   void _saveProfile() async {
+    if (!_formKey.currentState!.validate()) return;
+
     final name = _nameCtrl.text.trim();
     final about = _aboutCtrl.text.trim();
     final phone = _completePhoneNumber;
-    
-    if (name.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Please enter your name')));
+
+    if (_needsPhoneNumber && phone.isEmpty) {
+      // IntlPhoneField should validate, but just in case
       return;
     }
 
-    if (_needsPhoneNumber) {
-      if (phone.isEmpty) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Please enter a valid phone number')));
-        return;
-      }
-    }
-    
     setState(() => _isLoading = true);
     final auth = ref.read(authServiceProvider.notifier);
-    
+
     String? finalPhone = _needsPhoneNumber ? phone : null;
-    
-    final success = await auth.setupProfile(name, about, phoneNumber: finalPhone);
-    
-    if (!mounted) return;
-    setState(() => _isLoading = false);
-    
-    if (!success) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Failed to save profile')));
+
+    try {
+      await auth.setupProfile(name, about, phoneNumber: finalPhone);
+      if (!mounted) return;
+      setState(() => _isLoading = false);
+      // If successful, the AuthWrapper will automatically redirect to HomeScreen
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _isLoading = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(ErrorHandler.getUserFriendlyMessage(e))),
+      );
     }
-    // If successful, the AuthWrapper will automatically redirect to HomeScreen
   }
 
   @override
@@ -93,41 +95,65 @@ class _ProfileSetupScreenState extends ConsumerState<ProfileSetupScreen> {
                   style: TextStyle(fontSize: 16),
                 ),
                 const SizedBox(height: 32),
-                TextField(
-                  controller: _nameCtrl,
-                  decoration: const InputDecoration(
-                    labelText: 'Type your name here',
-                    prefixIcon: Icon(Icons.person),
-                  ),
-                  textCapitalization: TextCapitalization.words,
-                ),
-                const SizedBox(height: 16),
-                if (_needsPhoneNumber) ...[
-                  IntlPhoneField(
-                    decoration: const InputDecoration(
-                      labelText: 'Phone Number',
-                      border: OutlineInputBorder(),
-                    ),
-                    initialCountryCode: 'IN',
-                    onChanged: (phone) {
-                      _completePhoneNumber = phone.completeNumber;
-                    },
-                  ),
-                  const SizedBox(height: 16),
-                ],
-                TextField(
-                  controller: _aboutCtrl,
-                  decoration: const InputDecoration(
-                    labelText: 'About',
-                    prefixIcon: Icon(Icons.info_outline),
+                Form(
+                  key: _formKey,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      TextFormField(
+                        controller: _nameCtrl,
+                        decoration: const InputDecoration(
+                          labelText: 'Type your name here',
+                          prefixIcon: Icon(Icons.person),
+                        ),
+                        textCapitalization: TextCapitalization.words,
+                        validator: (val) => val == null || val.isEmpty
+                            ? 'Please enter your name'
+                            : null,
+                      ),
+                      const SizedBox(height: 16),
+                      if (_needsPhoneNumber) ...[
+                        IntlPhoneField(
+                          decoration: const InputDecoration(
+                            labelText: 'Phone Number',
+                            border: OutlineInputBorder(),
+                          ),
+                          initialCountryCode: 'IN',
+                          onChanged: (phone) {
+                            _completePhoneNumber = phone.completeNumber;
+                          },
+                          validator: (phone) {
+                            if (phone == null || phone.number.length != 10) {
+                              return 'Please enter exactly 10 digits';
+                            }
+                            return null;
+                          },
+                        ),
+                        const SizedBox(height: 16),
+                      ],
+                      TextFormField(
+                        controller: _aboutCtrl,
+                        decoration: const InputDecoration(
+                          labelText: 'About',
+                          prefixIcon: Icon(Icons.info_outline),
+                        ),
+                      ),
+                    ],
                   ),
                 ),
                 const SizedBox(height: 32),
                 ElevatedButton(
                   onPressed: _isLoading ? null : _saveProfile,
-                  child: _isLoading 
-                    ? const SizedBox(height: 20, width: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
-                    : const Text('Next'),
+                  child: _isLoading
+                      ? SizedBox(
+                          height: 20,
+                          width: 20,
+                          child: CircularProgressIndicator(
+                            color: Theme.of(context).colorScheme.onPrimary,
+                            strokeWidth: 2,
+                          ),
+                        )
+                      : const Text('Next'),
                 ),
               ],
             ),

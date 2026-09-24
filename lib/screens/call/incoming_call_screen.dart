@@ -1,11 +1,15 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'video_call_screen.dart';
 import 'audio_call_screen.dart';
-import '../../main.dart';
 
-class IncomingCallScreen extends ConsumerWidget {
+import '../../widgets/profile_image.dart';
+import '../../repositories/call_repository.dart';
+import 'package:flutter_callkit_incoming/flutter_callkit_incoming.dart';
+
+class IncomingCallScreen extends ConsumerStatefulWidget {
   final String callId;
   final String callerName;
   final String callerPic;
@@ -22,20 +26,47 @@ class IncomingCallScreen extends ConsumerWidget {
   });
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    // Listen to call status, if it's no longer ringing, pop this screen
-    return StreamBuilder<DocumentSnapshot>(
-      stream: FirebaseFirestore.instance.collection('calls').doc(callId).snapshots(),
+  ConsumerState<IncomingCallScreen> createState() => _IncomingCallScreenState();
+}
+
+class _IncomingCallScreenState extends ConsumerState<IncomingCallScreen> {
+  bool _isPopping = false;
+  bool _isProcessingAccept = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final repository = CallRepository(FirebaseFirestore.instance);
+
+    // Listen to call status stream: if status turns terminal (e.g. caller cancels), pop screen immediately
+    return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+      stream: FirebaseFirestore.instance
+          .collection('calls')
+          .doc(widget.callId)
+          .snapshots(),
       builder: (context, snapshot) {
         if (snapshot.hasData && snapshot.data!.exists) {
-          final data = snapshot.data!.data() as Map<String, dynamic>;
-          final status = data['status'];
-          if (status == 'missed' || status == 'ended' || status == 'declined') {
-            WidgetsBinding.instance.addPostFrameCallback((_) {
-              if (context.mounted && Navigator.of(context).canPop()) {
-                Navigator.of(context).pop();
-              }
-            });
+          final data = snapshot.data!.data();
+          if (data != null) {
+            final status = data['status'];
+            final terminalStatuses = [
+              'cancelled',
+              'declined',
+              'missed',
+              'ended',
+              'rejected',
+              'caller_ended',
+            ];
+            if (terminalStatuses.contains(status)) {
+              WidgetsBinding.instance.addPostFrameCallback((_) {
+                if (context.mounted &&
+                    Navigator.of(context).canPop() &&
+                    !_isPopping) {
+                  _isPopping = true;
+                  FlutterCallkitIncoming.endAllCalls().catchError((_) {});
+                  Navigator.of(context).pop();
+                }
+              });
+            }
           }
         }
 
@@ -46,21 +77,21 @@ class IncomingCallScreen extends ConsumerWidget {
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
                 const Spacer(),
-                CircleAvatar(
-                  radius: 60,
-                  backgroundImage: callerPic.isNotEmpty ? NetworkImage(callerPic) : null,
-                  child: callerPic.isEmpty ? const Icon(Icons.person, size: 60) : null,
-                ),
+                ProfileImage(imageUrl: widget.callerPic, radius: 60),
                 const SizedBox(height: 24),
                 Text(
-                  callerName,
-                  style: Theme.of(context).textTheme.headlineMedium?.copyWith(fontWeight: FontWeight.bold),
+                  widget.callerName,
+                  style: Theme.of(context).textTheme.headlineMedium?.copyWith(
+                    fontWeight: FontWeight.bold,
+                  ),
                 ),
                 const SizedBox(height: 8),
                 Text(
-                  'Incoming ${isVideo ? 'Video' : 'Audio'} Call...',
+                  'Incoming ${widget.isVideo ? 'Video' : 'Audio'} Call...',
                   style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                    color: Theme.of(context).colorScheme.onSurface.withOpacity(0.7),
+                    color: Theme.of(
+                      context,
+                    ).colorScheme.onSurface.withValues(alpha: 0.7),
                   ),
                 ),
                 const Spacer(),
@@ -70,29 +101,95 @@ class IncomingCallScreen extends ConsumerWidget {
                     // Decline Button
                     FloatingActionButton.large(
                       heroTag: 'decline_btn',
-                      onPressed: () {
-                        FirebaseFirestore.instance.collection('calls').doc(callId).update({'status': 'declined'}).catchError((_) {});
-                        Navigator.of(context).pop();
+                      onPressed: () async {
+                        if (_isPopping) return;
+                        _isPopping = true;
+
+                        final user = FirebaseAuth.instance.currentUser;
+                        String? name = user?.displayName;
+                        if (user != null && (name == null || name.isEmpty)) {
+                          final doc = await FirebaseFirestore.instance
+                              .collection('users')
+                              .doc(user.uid)
+                              .get();
+                          name = doc.data()?['name'];
+                        }
+
+                        await repository.endCallTransaction(
+                          callId: widget.callId,
+                          status: 'rejected',
+                          endedBy: user?.uid,
+                          endedByName: name,
+                        );
+
+                        FlutterCallkitIncoming.endAllCalls().catchError((_) {});
+                        if (context.mounted && Navigator.of(context).canPop()) {
+                          Navigator.of(context).pop();
+                        }
                       },
                       backgroundColor: Colors.red,
-                      child: const Icon(Icons.call_end, color: Colors.white, size: 36),
+                      child: const Icon(
+                        Icons.call_end,
+                        color: Colors.white,
+                        size: 36,
+                      ),
                     ),
-                    // Accept Button
+                    // Accept Button with Atomic Zombie-Call Pre-Check
                     FloatingActionButton.large(
                       heroTag: 'accept_btn',
-                      onPressed: () {
-                        FirebaseFirestore.instance.collection('calls').doc(callId).update({'status': 'accepted'}).catchError((_) {});
-                        Navigator.pushReplacement(
-                          context,
-                          MaterialPageRoute(
-                            builder: (_) => isVideo
-                                ? VideoCallScreen(callerName: callId, agoraChannelId: agoraChannelId)
-                                : AudioCallScreen(callerName: callId, agoraChannelId: agoraChannelId),
-                          ),
-                        );
-                      },
+                      onPressed: _isProcessingAccept
+                          ? null
+                          : () async {
+                              setState(() => _isProcessingAccept = true);
+
+                              final isAccepted = await repository
+                                  .acceptCallPreCheck(widget.callId);
+
+                              if (!isAccepted) {
+                                // Call was canceled by caller before receiver accepted
+                                FlutterCallkitIncoming.endAllCalls().catchError(
+                                  (_) {},
+                                );
+                                if (context.mounted) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    const SnackBar(
+                                      content: Text(
+                                        'Call was canceled by the caller',
+                                      ),
+                                    ),
+                                  );
+                                  if (Navigator.of(context).canPop()) {
+                                    Navigator.of(context).pop();
+                                  }
+                                }
+                                return;
+                              }
+
+                              if (context.mounted) {
+                                Navigator.pushReplacement(
+                                  context,
+                                  MaterialPageRoute(
+                                    builder: (_) => widget.isVideo
+                                        ? VideoCallScreen(
+                                            callerName: widget.callId,
+                                            agoraChannelId:
+                                                widget.agoraChannelId,
+                                          )
+                                        : AudioCallScreen(
+                                            callerName: widget.callId,
+                                            agoraChannelId:
+                                                widget.agoraChannelId,
+                                          ),
+                                  ),
+                                );
+                              }
+                            },
                       backgroundColor: Colors.green,
-                      child: Icon(isVideo ? Icons.videocam : Icons.call, color: Colors.white, size: 36),
+                      child: Icon(
+                        widget.isVideo ? Icons.videocam : Icons.call,
+                        color: Colors.white,
+                        size: 36,
+                      ),
                     ),
                   ],
                 ),

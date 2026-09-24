@@ -8,6 +8,7 @@ class UserModel {
   final bool isOnline;
   final bool isBusy;
   final String? fcmToken;
+  final DateTime? lastSeen;
 
   UserModel({
     required this.uid,
@@ -19,6 +20,7 @@ class UserModel {
     this.isOnline = true,
     this.isBusy = false,
     this.fcmToken,
+    this.lastSeen,
   });
 
   factory UserModel.fromMap(Map<String, dynamic> data, String uid) {
@@ -32,6 +34,9 @@ class UserModel {
       isOnline: data['isOnline'] ?? false,
       isBusy: data['isBusy'] ?? false,
       fcmToken: data['fcmToken'],
+      lastSeen: data['lastSeen'] != null
+          ? (data['lastSeen'] as dynamic).toDate()
+          : null,
     );
   }
 
@@ -45,6 +50,7 @@ class UserModel {
       'isOnline': isOnline,
       'isBusy': isBusy,
       'fcmToken': fcmToken,
+      'lastSeen': lastSeen,
     };
   }
 }

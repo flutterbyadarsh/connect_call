@@ -5,9 +5,9 @@ import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
+import 'package:firebase_storage/firebase_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:device_info_plus/device_info_plus.dart';
 import '../../models/user_model.dart';
 
 final authServiceProvider = ChangeNotifierProvider<AuthService>((ref) {
@@ -17,9 +17,9 @@ final authServiceProvider = ChangeNotifierProvider<AuthService>((ref) {
 class AuthService extends ChangeNotifier {
   UserModel? _currentUser;
   bool _isLoading = true;
-  
+
   // Set to true to bypass Firebase for UI testing
-  final bool _useMock = false; 
+  final bool _useMock = false;
 
   UserModel? get currentUser => _currentUser;
   bool get isLoading => _isLoading;
@@ -41,7 +41,22 @@ class AuthService extends ChangeNotifier {
   Future<void> _saveUserToCache(UserModel user) async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      await prefs.setString(_kUserCache, jsonEncode(user.toMap()));
+      // To prevent Binder IPC TransactionTooLargeException on Android,
+      // do not save giant base64 strings to SharedPreferences.
+      UserModel userToCache = user;
+      if (user.profileImageUrl.startsWith('data:image') &&
+          user.profileImageUrl.length > 100000) {
+        userToCache = UserModel(
+          uid: user.uid,
+          name: user.name,
+          email: user.email,
+          phoneNumber: user.phoneNumber,
+          about: user.about,
+          profileImageUrl: '', // Clear it for cache
+          isOnline: user.isOnline,
+        );
+      }
+      await prefs.setString(_kUserCache, jsonEncode(userToCache.toMap()));
     } catch (e) {
       debugPrint('Cache save error: $e');
     }
@@ -70,7 +85,7 @@ class AuthService extends ChangeNotifier {
       notifyListeners();
       return;
     }
-    
+
     try {
       FirebaseAuth.instance.authStateChanges().listen((User? user) async {
         try {
@@ -85,7 +100,10 @@ class AuthService extends ChangeNotifier {
 
             // Then try Firestore for fresh data
             try {
-              final doc = await FirebaseFirestore.instance.collection('users').doc(user.uid).get();
+              final doc = await FirebaseFirestore.instance
+                  .collection('users')
+                  .doc(user.uid)
+                  .get();
               if (doc.exists) {
                 final data = doc.data()!;
                 _currentUser = UserModel(
@@ -98,7 +116,9 @@ class AuthService extends ChangeNotifier {
                   isOnline: data['isOnline'] ?? true,
                   fcmToken: data['fcmToken'],
                 );
-                await _saveUserToCache(_currentUser!); // Save fresh data to cache
+                await _saveUserToCache(
+                  _currentUser!,
+                ); // Save fresh data to cache
               } else if (cached != null && cached.name.isNotEmpty) {
                 // Doc not in Firestore but we have cache — restore to Firestore
                 await FirebaseFirestore.instance
@@ -107,13 +127,23 @@ class AuthService extends ChangeNotifier {
                     .set(cached.toMap(), SetOptions(merge: true));
                 _currentUser = cached;
               } else {
-                _currentUser = UserModel(uid: user.uid, email: '', name: '', phoneNumber: user.phoneNumber ?? '');
+                _currentUser = UserModel(
+                  uid: user.uid,
+                  email: '',
+                  name: '',
+                  phoneNumber: user.phoneNumber ?? '',
+                );
               }
             } catch (fsError) {
               debugPrint('Firestore error, using cache: $fsError');
               // Firestore failed — keep cached data if available
               if (cached == null || cached.name.isEmpty) {
-                _currentUser = UserModel(uid: user.uid, email: '', name: '', phoneNumber: user.phoneNumber ?? '');
+                _currentUser = UserModel(
+                  uid: user.uid,
+                  email: '',
+                  name: '',
+                  phoneNumber: user.phoneNumber ?? '',
+                );
               }
             }
             _updateFCMToken(user.uid);
@@ -124,7 +154,12 @@ class AuthService extends ChangeNotifier {
         } catch (e) {
           debugPrint('Auth Check Error: $e');
           if (user != null) {
-            _currentUser = UserModel(uid: user.uid, email: '', name: '', phoneNumber: user.phoneNumber ?? '');
+            _currentUser = UserModel(
+              uid: user.uid,
+              email: '',
+              name: '',
+              phoneNumber: user.phoneNumber ?? '',
+            );
             _updateFCMToken(user.uid);
           } else {
             _currentUser = null;
@@ -148,7 +183,7 @@ class AuthService extends ChangeNotifier {
         await FirebaseFirestore.instance.collection('users').doc(uid).set({
           'fcmToken': token,
         }, SetOptions(merge: true));
-        
+
         if (_currentUser != null) {
           final data = _currentUser!.toMap();
           data['fcmToken'] = token;
@@ -156,7 +191,7 @@ class AuthService extends ChangeNotifier {
           notifyListeners();
         }
       }
-      
+
       // Listen for token refresh
       FirebaseMessaging.instance.onTokenRefresh.listen((newToken) {
         FirebaseFirestore.instance.collection('users').doc(uid).set({
@@ -203,9 +238,10 @@ class AuthService extends ChangeNotifier {
       return true;
     } catch (e) {
       debugPrint("OTP Verification Error: $e");
-      return false;
+      rethrow;
     }
   }
+
   Future<bool> signInWithEmailPassword(String email, String password) async {
     try {
       await FirebaseAuth.instance.signInWithEmailAndPassword(
@@ -215,11 +251,15 @@ class AuthService extends ChangeNotifier {
       return true;
     } catch (e) {
       debugPrint("Email Sign In Error: $e");
-      return false;
+      rethrow;
     }
   }
 
-  Future<bool> signUpWithEmailPassword(String email, String password, {required String name}) async {
+  Future<bool> signUpWithEmailPassword(
+    String email,
+    String password, {
+    required String name,
+  }) async {
     try {
       final cred = await FirebaseAuth.instance.createUserWithEmailAndPassword(
         email: email,
@@ -229,31 +269,46 @@ class AuthService extends ChangeNotifier {
       return true;
     } catch (e) {
       debugPrint("Email Sign Up Error: $e");
-      return false;
+      rethrow;
     }
   }
 
-  Future<bool> setupProfile(String name, String about, {String? phoneNumber}) async {
-    final user = FirebaseAuth.instance.currentUser;
-    if (user == null) return false;
-
+  Future<bool> setupProfile(
+    String name,
+    String about, {
+    String? phoneNumber,
+  }) async {
     try {
-      final userModel = UserModel(
-        uid: user.uid,
-        name: name,
-        email: user.email ?? '',
-        phoneNumber: phoneNumber ?? user.phoneNumber ?? '',
-        about: about,
-      );
-      await FirebaseFirestore.instance.collection('users').doc(user.uid).set(userModel.toMap(), SetOptions(merge: true));
-      
-      _currentUser = userModel;
-      await _saveUserToCache(userModel); // Cache locally for persistence
-      notifyListeners();
-      return true;
-    } catch (e) {
-      debugPrint("Profile Setup Error: $e");
+      User? user = FirebaseAuth.instance.currentUser;
+      if (user != null) {
+        String? finalPhone = phoneNumber ?? user.phoneNumber;
+        await user.updateDisplayName(name);
+
+        // Save to Firestore
+        final userData = UserModel(
+          uid: user.uid,
+          name: name,
+          email: user.email ?? '',
+          phoneNumber: finalPhone ?? '',
+          about: about,
+          profileImageUrl: '',
+          isOnline: true,
+        );
+
+        await FirebaseFirestore.instance
+            .collection('users')
+            .doc(user.uid)
+            .set(userData.toMap());
+
+        _currentUser = userData;
+        _isLoading = false;
+        notifyListeners();
+        return true;
+      }
       return false;
+    } catch (e) {
+      debugPrint("Setup Profile Error: $e");
+      rethrow;
     }
   }
 
@@ -271,16 +326,19 @@ class AuthService extends ChangeNotifier {
     if (user == null || _currentUser == null) return false;
 
     try {
-      // Compress and convert image to base64
+      // Upload to Firebase Storage
       final file = File(filePath);
-      final bytes = await file.readAsBytes();
-      
-      // Keep it as a base64 string
-      String base64Image = "data:image/jpeg;base64,${base64Encode(bytes)}";
+      final storageRef = FirebaseStorage.instance.ref().child(
+        'profile_pics/${user.uid}.jpg',
+      );
+
+      final uploadTask = storageRef.putFile(file);
+      final snapshot = await uploadTask;
+      final downloadUrl = await snapshot.ref.getDownloadURL();
 
       // Update Firestore directly (using set with merge so it creates doc if it doesn't exist)
       await FirebaseFirestore.instance.collection('users').doc(user.uid).set({
-        'profileImageUrl': base64Image,
+        'profileImageUrl': downloadUrl,
       }, SetOptions(merge: true));
 
       // Update local model
@@ -290,9 +348,10 @@ class AuthService extends ChangeNotifier {
         email: _currentUser!.email,
         phoneNumber: _currentUser!.phoneNumber,
         about: _currentUser!.about,
-        profileImageUrl: base64Image,
+        profileImageUrl: downloadUrl,
         isOnline: _currentUser!.isOnline,
       );
+      await _saveUserToCache(_currentUser!); // <--- Added this line
       notifyListeners();
       return true;
     } catch (e) {
@@ -329,7 +388,11 @@ class AuthService extends ChangeNotifier {
     }
   }
 
-  Future<bool> updateProfileDetails(String name, String phone, String about) async {
+  Future<bool> updateProfileDetails(
+    String name,
+    String phone,
+    String about,
+  ) async {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null || _currentUser == null) return false;
 
@@ -355,6 +418,45 @@ class AuthService extends ChangeNotifier {
     } catch (e) {
       debugPrint("Error updating profile: $e");
       return false;
+    }
+  }
+
+  Future<void> deleteAccount({String? password}) async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) throw Exception('Not authenticated');
+
+    try {
+      if (password != null && user.email != null) {
+        final credential = EmailAuthProvider.credential(
+          email: user.email!,
+          password: password,
+        );
+        await user.reauthenticateWithCredential(credential);
+      }
+
+      // Delete user data from Firestore
+      await FirebaseFirestore.instance
+          .collection('users')
+          .doc(user.uid)
+          .delete();
+
+      // Delete user account
+      await user.delete();
+
+      // Clear local cache
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove(_kUserCache);
+
+      _currentUser = null;
+      notifyListeners();
+    } on FirebaseAuthException catch (e) {
+      if (e.code == 'requires-recent-login') {
+        throw FirebaseAuthException(
+          code: 'requires-recent-login',
+          message: 'Please provide your password to confirm account deletion.',
+        );
+      }
+      rethrow;
     }
   }
 }

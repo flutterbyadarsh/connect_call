@@ -1,0 +1,21 @@
+Analyzing connect_call...                                       
+
+   info • The parameter name 'sum' matches a visible type name • lib/providers/chat_providers.dart:28:63 • avoid_types_as_parameter_names
+warning • The value of the local variable 'now' isn't used • lib/repositories/chat_repository.dart:21:11 • unused_local_variable
+   info • Unnecessary use of multiple underscores • lib/screens/chat/chat_home_screen.dart:219:36 • unnecessary_underscores
+   info • Unnecessary use of multiple underscores • lib/screens/chat/contact_profile_screen.dart:187:26 • unnecessary_underscores
+warning • The value of the field '_searchResults' isn't used • lib/screens/chat/contacts_screen.dart:17:36 • unused_field
+   info • Don't use 'BuildContext's across async gaps • lib/screens/home/call_logs_tab.dart:274:19 • use_build_context_synchronously
+   info • Don't use 'BuildContext's across async gaps • lib/screens/home/call_logs_tab.dart:284:19 • use_build_context_synchronously
+   info • Unnecessary use of multiple underscores • lib/screens/home/call_logs_tab.dart:365:22 • unnecessary_underscores
+   info • Don't use 'BuildContext's across async gaps • lib/screens/home/call_logs_tab.dart:419:19 • use_build_context_synchronously
+   info • Don't use 'BuildContext's across async gaps • lib/screens/home/call_logs_tab.dart:429:19 • use_build_context_synchronously
+   info • Don't use 'BuildContext's across async gaps • lib/screens/home/call_logs_tab.dart:441:36 • use_build_context_synchronously
+warning • The value of the local variable 'phoneCtrl' isn't used • lib/screens/home/contacts_tab.dart:101:11 • unused_local_variable
+   info • Don't use 'BuildContext's across async gaps, guarded by an unrelated 'mounted' check • lib/screens/home/contacts_tab.dart:179:44 • use_build_context_synchronously
+   info • Don't use 'BuildContext's across async gaps, guarded by an unrelated 'mounted' check • lib/screens/home/profile_screen.dart:221:45 • use_build_context_synchronously
+   info • Unnecessary use of multiple underscores • lib/widgets/call_ui_widgets.dart:143:20 • unnecessary_underscores
+   info • Unnecessary use of multiple underscores • lib/widgets/call_ui_widgets.dart:210:39 • unnecessary_underscores
+   info • Unnecessary use of multiple underscores • lib/widgets/call_ui_widgets.dart:210:43 • unnecessary_underscores
+   info • Unnecessary use of multiple underscores • lib/widgets/user_tile.dart:114:24 • unnecessary_underscores
+

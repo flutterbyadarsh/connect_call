@@ -3,7 +3,9 @@ import 'package:flutter/material.dart';
 class AppTheme {
   static const Color primaryColor = Color(0xFF2563EB); // Professional Blue
   static const Color secondaryColor = Color(0xFF0F172A); // Slate/Navy
-  static const Color backgroundColor = Color(0xFFF8FAFC); // Very light grey-blue
+  static const Color backgroundColor = Color(
+    0xFFF8FAFC,
+  ); // Very light grey-blue
   static const Color surfaceColor = Colors.white;
   static const Color textPrimary = Color(0xFF1E293B); // Dark slate
   static const Color textSecondary = Color(0xFF64748B); // Medium slate
@@ -26,6 +28,12 @@ class AppTheme {
         elevation: 0,
         centerTitle: true,
       ),
+      cardTheme: CardThemeData(
+        color: surfaceColor,
+        elevation: 1.5,
+        margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      ),
       elevatedButtonTheme: ElevatedButtonThemeData(
         style: ElevatedButton.styleFrom(
           backgroundColor: primaryColor,
@@ -35,16 +43,16 @@ class AppTheme {
             borderRadius: BorderRadius.circular(12),
           ),
           padding: const EdgeInsets.symmetric(vertical: 16),
-          textStyle: const TextStyle(
-            fontSize: 16,
-            fontWeight: FontWeight.w600,
-          ),
+          textStyle: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
         ),
       ),
       inputDecorationTheme: InputDecorationTheme(
         filled: true,
         fillColor: surfaceColor,
-        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+        contentPadding: const EdgeInsets.symmetric(
+          horizontal: 16,
+          vertical: 16,
+        ),
         border: OutlineInputBorder(
           borderRadius: BorderRadius.circular(12),
           borderSide: BorderSide(color: Colors.grey.shade300),
@@ -59,7 +67,10 @@ class AppTheme {
         ),
       ),
       textTheme: const TextTheme(
-        headlineMedium: TextStyle(color: textPrimary, fontWeight: FontWeight.bold),
+        headlineMedium: TextStyle(
+          color: textPrimary,
+          fontWeight: FontWeight.bold,
+        ),
         bodyLarge: TextStyle(color: textPrimary),
         bodyMedium: TextStyle(color: textSecondary),
       ),
@@ -70,7 +81,7 @@ class AppTheme {
     return ThemeData(
       brightness: Brightness.dark,
       primaryColor: primaryColor,
-      scaffoldBackgroundColor: const Color(0xFF121212),
+      scaffoldBackgroundColor: Colors.black,
       colorScheme: const ColorScheme.dark(
         primary: primaryColor,
         secondary: secondaryColor,
@@ -83,6 +94,14 @@ class AppTheme {
         elevation: 0,
         centerTitle: true,
       ),
+      cardTheme: const CardThemeData(
+        color: Color(0xFF1E1E1E),
+        elevation: 1.5,
+        margin: EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.all(Radius.circular(16)),
+        ),
+      ),
       elevatedButtonTheme: ElevatedButtonThemeData(
         style: ElevatedButton.styleFrom(
           backgroundColor: primaryColor,
@@ -92,16 +111,16 @@ class AppTheme {
             borderRadius: BorderRadius.circular(12),
           ),
           padding: const EdgeInsets.symmetric(vertical: 16),
-          textStyle: const TextStyle(
-            fontSize: 16,
-            fontWeight: FontWeight.w600,
-          ),
+          textStyle: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
         ),
       ),
       inputDecorationTheme: InputDecorationTheme(
         filled: true,
         fillColor: const Color(0xFF1E1E1E),
-        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+        contentPadding: const EdgeInsets.symmetric(
+          horizontal: 16,
+          vertical: 16,
+        ),
         border: OutlineInputBorder(
           borderRadius: BorderRadius.circular(12),
           borderSide: const BorderSide(color: Colors.white24),
@@ -116,7 +135,10 @@ class AppTheme {
         ),
       ),
       textTheme: const TextTheme(
-        headlineMedium: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+        headlineMedium: TextStyle(
+          color: Colors.white,
+          fontWeight: FontWeight.bold,
+        ),
         bodyLarge: TextStyle(color: Colors.white),
         bodyMedium: TextStyle(color: Colors.white70),
       ),

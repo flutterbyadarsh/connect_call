@@ -1,10 +1,8 @@
-import 'dart:io';
-import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:image_picker/image_picker.dart';
 import '../../services/auth_service.dart';
-import '../../services/call_service.dart';
+import '../../widgets/profile_image.dart';
+import 'package:image_picker/image_picker.dart';
 
 class ProfileScreen extends ConsumerStatefulWidget {
   const ProfileScreen({super.key});
@@ -29,15 +27,31 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Text('Profile Photo', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+            const Text(
+              'Profile Photo',
+              style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+            ),
             const SizedBox(height: 24),
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceEvenly,
               children: [
-                _buildPickerOption(Icons.camera_alt, 'Camera', () => _pickImage(ImageSource.camera, auth, ctx)),
-                _buildPickerOption(Icons.photo_library, 'Gallery', () => _pickImage(ImageSource.gallery, auth, ctx)),
+                _buildPickerOption(
+                  Icons.camera_alt,
+                  'Camera',
+                  () => _pickImage(ImageSource.camera, auth, ctx),
+                ),
+                _buildPickerOption(
+                  Icons.photo_library,
+                  'Gallery',
+                  () => _pickImage(ImageSource.gallery, auth, ctx),
+                ),
                 if (auth.currentUser?.profileImageUrl.isNotEmpty ?? false)
-                  _buildPickerOption(Icons.delete, 'Remove', () => _removeImage(auth, ctx), color: Colors.red),
+                  _buildPickerOption(
+                    Icons.delete,
+                    'Remove',
+                    () => _removeImage(auth, ctx),
+                    color: Colors.red,
+                  ),
               ],
             ),
           ],
@@ -46,7 +60,12 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
     );
   }
 
-  Widget _buildPickerOption(IconData icon, String label, VoidCallback onTap, {Color color = Colors.indigo}) {
+  Widget _buildPickerOption(
+    IconData icon,
+    String label,
+    VoidCallback onTap, {
+    Color color = Colors.indigo,
+  }) {
     return GestureDetector(
       onTap: onTap,
       child: Column(
@@ -60,17 +79,24 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
             child: Icon(icon, color: color, size: 28),
           ),
           const SizedBox(height: 8),
-          Text(label, style: TextStyle(color: color, fontWeight: FontWeight.w500)),
+          Text(
+            label,
+            style: TextStyle(color: color, fontWeight: FontWeight.w500),
+          ),
         ],
       ),
     );
   }
 
-  Future<void> _pickImage(ImageSource source, AuthService auth, BuildContext ctx) async {
+  Future<void> _pickImage(
+    ImageSource source,
+    AuthService auth,
+    BuildContext ctx,
+  ) async {
     Navigator.pop(ctx);
     final picker = ImagePicker();
     final pickedFile = await picker.pickImage(source: source, imageQuality: 70);
-    
+
     if (pickedFile != null) {
       setState(() => _isUploading = true);
       await auth.updateProfileImage(pickedFile.path);
@@ -88,11 +114,11 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
   void _showEditProfileSheet(BuildContext context, AuthService auth) {
     final user = auth.currentUser;
     if (user == null) return;
-    
+
     final nameCtrl = TextEditingController(text: user.name);
     final phoneCtrl = TextEditingController(text: user.phoneNumber);
     final aboutCtrl = TextEditingController(text: user.about);
-    
+
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -111,25 +137,41 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Text('Edit Profile', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+            const Text(
+              'Edit Profile',
+              style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+            ),
             const SizedBox(height: 16),
             TextField(
               controller: nameCtrl,
               maxLength: 30,
-              decoration: const InputDecoration(labelText: 'Name', prefixIcon: Icon(Icons.person)),
+              decoration: const InputDecoration(
+                labelText: 'Name',
+                prefixIcon: Icon(Icons.person),
+              ),
             ),
             const SizedBox(height: 8),
             TextField(
               controller: phoneCtrl,
-              keyboardType: TextInputType.phone,
-              maxLength: 10,
-              decoration: const InputDecoration(labelText: 'Phone Number', prefixIcon: Icon(Icons.phone)),
+              readOnly: true,
+              decoration: InputDecoration(
+                labelText: 'Phone Number',
+                prefixIcon: const Icon(Icons.phone),
+                suffixIcon: const Icon(Icons.lock_outline, size: 18),
+                filled: true,
+                fillColor: Theme.of(ctx).disabledColor.withValues(alpha: 0.1),
+                border: const OutlineInputBorder(),
+              ),
+              style: TextStyle(color: Theme.of(ctx).disabledColor),
             ),
             const SizedBox(height: 8),
             TextField(
               controller: aboutCtrl,
               maxLength: 100,
-              decoration: const InputDecoration(labelText: 'About', prefixIcon: Icon(Icons.info)),
+              decoration: const InputDecoration(
+                labelText: 'About',
+                prefixIcon: Icon(Icons.info),
+              ),
             ),
             const SizedBox(height: 24),
             ElevatedButton(
@@ -141,13 +183,20 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
               onPressed: () async {
                 final name = nameCtrl.text.trim();
                 final phone = phoneCtrl.text.trim();
-                if (name.isEmpty || phone.isEmpty) {
-                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Name and Phone are required')));
+                if (name.isEmpty) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('Name is required')),
+                  );
                   return;
                 }
+
                 Navigator.pop(ctx);
                 setState(() => _isUploading = true);
-                await auth.updateProfileDetails(name, phone, aboutCtrl.text.trim());
+                await auth.updateProfileDetails(
+                  name,
+                  phone,
+                  aboutCtrl.text.trim(),
+                );
                 if (mounted) setState(() => _isUploading = false);
               },
               child: const Text('Save Changes'),
@@ -155,6 +204,107 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
           ],
         ),
       ),
+    );
+  }
+
+  void _showDeleteAccountDialog(BuildContext context, dynamic auth) {
+    final passwordCtrl = TextEditingController();
+    bool isLoading = false;
+    String? errorMsg;
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (context, setState) {
+            return AlertDialog(
+              title: const Text(
+                'Delete Account',
+                style: TextStyle(color: Colors.red),
+              ),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Are you sure you want to delete your account? This action cannot be undone.',
+                  ),
+                  if (errorMsg != null) ...[
+                    const SizedBox(height: 12),
+                    Text(
+                      errorMsg!,
+                      style: const TextStyle(color: Colors.red, fontSize: 12),
+                    ),
+                  ],
+                  if (errorMsg != null && errorMsg!.contains('password')) ...[
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: passwordCtrl,
+                      obscureText: true,
+                      decoration: InputDecoration(
+                        labelText: 'Password',
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+              actions: [
+                TextButton(
+                  onPressed: isLoading ? null : () => Navigator.pop(ctx),
+                  child: const Text('Cancel'),
+                ),
+                TextButton(
+                  onPressed: isLoading
+                      ? null
+                      : () async {
+                          setState(() {
+                            isLoading = true;
+                            errorMsg = null;
+                          });
+                          try {
+                            await auth.deleteAccount(
+                              password: passwordCtrl.text.isNotEmpty
+                                  ? passwordCtrl.text
+                                  : null,
+                            );
+                            if (mounted) {
+                              Navigator.pop(ctx);
+                              Navigator.pop(this.context);
+                            }
+                          } catch (e) {
+                            setState(() {
+                              isLoading = false;
+                              if (e.toString().contains(
+                                'requires-recent-login',
+                              )) {
+                                errorMsg =
+                                    'Please provide your password to confirm account deletion.';
+                              } else {
+                                errorMsg = e.toString();
+                              }
+                            });
+                          }
+                        },
+                  child: isLoading
+                      ? const SizedBox(
+                          width: 20,
+                          height: 20,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Text(
+                          'Delete',
+                          style: TextStyle(color: Colors.red),
+                        ),
+                ),
+              ],
+            );
+          },
+        );
+      },
     );
   }
 
@@ -169,7 +319,8 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
         centerTitle: true,
         actions: [
           IconButton(
-            icon: const Icon(Icons.edit),
+            icon: const Icon(Icons.edit, semanticLabel: 'Edit Profile'),
+            tooltip: 'Edit Profile',
             onPressed: () => _showEditProfileSheet(context, auth),
           ),
         ],
@@ -191,20 +342,31 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
                           padding: const EdgeInsets.all(4),
                           decoration: BoxDecoration(
                             shape: BoxShape.circle,
-                            border: Border.all(color: Theme.of(context).primaryColor.withOpacity(0.5), width: 3),
+                            border: Border.all(
+                              color: Theme.of(
+                                context,
+                              ).primaryColor.withValues(alpha: 0.5),
+                              width: 3,
+                            ),
                           ),
-                          child: CircleAvatar(
-                            radius: 50,
-                            backgroundColor: Theme.of(context).primaryColor.withOpacity(0.1),
-                            backgroundImage: user.profileImageUrl.isNotEmpty
-                                ? MemoryImage(base64Decode(user.profileImageUrl.split(',').last))
-                                : null,
-                            child: user.profileImageUrl.isEmpty
-                                ? Text(
-                                    user.name.isNotEmpty ? user.name[0].toUpperCase() : '?',
-                                    style: TextStyle(fontSize: 40, color: Theme.of(context).primaryColor, fontWeight: FontWeight.bold),
-                                  )
-                                : null,
+                          child: ProfileImage(
+                            imageUrl: user.profileImageUrl,
+                            radius: 60,
+                            fallbackWidget: CircleAvatar(
+                              radius: 60,
+                              backgroundColor: Theme.of(
+                                context,
+                              ).primaryColor.withValues(alpha: 0.1),
+                              child: Text(
+                                user.name.isNotEmpty
+                                    ? user.name[0].toUpperCase()
+                                    : '?',
+                                style: TextStyle(
+                                  color: Theme.of(context).primaryColor,
+                                  fontSize: 40,
+                                ),
+                              ),
+                            ),
                           ),
                         ),
                         Positioned(
@@ -216,7 +378,11 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
                               color: Theme.of(context).primaryColor,
                               shape: BoxShape.circle,
                             ),
-                            child: const Icon(Icons.camera_alt, color: Colors.white, size: 20),
+                            child: const Icon(
+                              Icons.camera_alt,
+                              color: Colors.white,
+                              size: 20,
+                            ),
                           ),
                         ),
                         if (_isUploading)
@@ -230,13 +396,23 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
                   // Name
                   Text(
                     user.name,
-                    style: TextStyle(fontSize: 26, fontWeight: FontWeight.bold, color: Theme.of(context).textTheme.bodyLarge?.color),
+                    style: TextStyle(
+                      fontSize: 26,
+                      fontWeight: FontWeight.bold,
+                      color: Theme.of(context).textTheme.bodyLarge?.color,
+                    ),
                   ),
                   const SizedBox(height: 32),
                   // Info Cards
                   _buildInfoTile(Icons.email_outlined, 'Email', user.email),
                   const SizedBox(height: 16),
-                  _buildInfoTile(Icons.phone_outlined, 'Phone No', user.phoneNumber.isEmpty ? 'Not Provided' : user.phoneNumber),
+                  _buildInfoTile(
+                    Icons.phone_outlined,
+                    'Phone No',
+                    user.phoneNumber.isEmpty
+                        ? 'Not Provided'
+                        : user.phoneNumber,
+                  ),
                   const SizedBox(height: 16),
                   _buildInfoTile(Icons.info_outline, 'About', user.about),
                   const SizedBox(height: 32),
@@ -253,11 +429,41 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
                         ),
                       ),
                       icon: const Icon(Icons.logout),
-                      label: const Text('Logout', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                      label: const Text(
+                        'Logout',
+                        style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
                       onPressed: () {
                         Navigator.pop(context);
                         auth.logout();
                       },
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  // Delete Account Button
+                  SizedBox(
+                    width: double.infinity,
+                    child: TextButton.icon(
+                      style: TextButton.styleFrom(
+                        foregroundColor: Colors.red.shade600,
+                        padding: const EdgeInsets.symmetric(vertical: 16),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(16),
+                          side: BorderSide(color: Colors.red.shade200),
+                        ),
+                      ),
+                      icon: const Icon(Icons.delete_forever),
+                      label: const Text(
+                        'Delete Account',
+                        style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      onPressed: () => _showDeleteAccountDialog(context, auth),
                     ),
                   ),
                 ],
@@ -287,7 +493,7 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
           Container(
             padding: const EdgeInsets.all(10),
             decoration: BoxDecoration(
-              color: Theme.of(context).primaryColor.withOpacity(0.1),
+              color: Theme.of(context).primaryColor.withValues(alpha: 0.1),
               borderRadius: BorderRadius.circular(12),
             ),
             child: Icon(icon, color: Theme.of(context).primaryColor, size: 24),
@@ -299,12 +505,20 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
               children: [
                 Text(
                   title,
-                  style: TextStyle(fontSize: 13, color: Theme.of(context).textTheme.bodyMedium?.color, fontWeight: FontWeight.w600),
+                  style: TextStyle(
+                    fontSize: 13,
+                    color: Theme.of(context).textTheme.bodyMedium?.color,
+                    fontWeight: FontWeight.w600,
+                  ),
                 ),
                 const SizedBox(height: 4),
                 Text(
                   subtitle,
-                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.w500, color: Theme.of(context).textTheme.bodyLarge?.color),
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w500,
+                    color: Theme.of(context).textTheme.bodyLarge?.color,
+                  ),
                 ),
               ],
             ),

@@ -12,6 +12,7 @@ class PhoneLoginScreen extends ConsumerStatefulWidget {
 }
 
 class _PhoneLoginScreenState extends ConsumerState<PhoneLoginScreen> {
+  final _formKey = GlobalKey<FormState>();
   String _completePhoneNumber = '';
   bool _isLoading = false;
 
@@ -21,30 +22,34 @@ class _PhoneLoginScreenState extends ConsumerState<PhoneLoginScreen> {
   }
 
   void _sendOTP() async {
+    if (!_formKey.currentState!.validate()) return;
+
     final phone = _completePhoneNumber;
-    
-    if (phone.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Please enter a valid phone number')));
-      return;
-    }
-    
+
     setState(() => _isLoading = true);
     final auth = ref.read(authServiceProvider.notifier);
-    
+
     await auth.verifyPhoneNumber(
       phoneNumber: phone,
       codeSent: (verificationId) {
         if (!mounted) return;
         setState(() => _isLoading = false);
-        Navigator.push(context, MaterialPageRoute(
-          builder: (_) => OTPScreen(verificationId: verificationId, phoneNumber: phone),
-        ));
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) =>
+                OTPScreen(verificationId: verificationId, phoneNumber: phone),
+          ),
+        );
       },
       verificationFailed: (error) {
         if (!mounted) return;
         setState(() => _isLoading = false);
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Verification Failed: $error')));
-      }
+        // Error from FirebaseAuthException
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Verification Failed: $error')));
+      },
     );
   }
 
@@ -59,7 +64,11 @@ class _PhoneLoginScreenState extends ConsumerState<PhoneLoginScreen> {
               mainAxisAlignment: MainAxisAlignment.center,
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                const Icon(Icons.video_call, size: 80, color: Color(0xFF4F46E5)),
+                const Icon(
+                  Icons.video_call,
+                  size: 80,
+                  color: Color(0xFF4F46E5),
+                ),
                 const SizedBox(height: 16),
                 const Text(
                   'ConnectCall',
@@ -73,22 +82,38 @@ class _PhoneLoginScreenState extends ConsumerState<PhoneLoginScreen> {
                   style: TextStyle(color: Colors.grey, fontSize: 16),
                 ),
                 const SizedBox(height: 48),
-                IntlPhoneField(
-                  decoration: const InputDecoration(
-                    labelText: 'Phone Number',
-                    border: OutlineInputBorder(),
+                Form(
+                  key: _formKey,
+                  child: IntlPhoneField(
+                    decoration: const InputDecoration(
+                      labelText: 'Phone Number',
+                      border: OutlineInputBorder(),
+                    ),
+                    initialCountryCode: 'IN',
+                    onChanged: (phone) {
+                      _completePhoneNumber = phone.completeNumber;
+                    },
+                    validator: (phone) {
+                      if (phone == null || phone.number.length != 10) {
+                        return 'Please enter exactly 10 digits';
+                      }
+                      return null;
+                    },
                   ),
-                  initialCountryCode: 'IN',
-                  onChanged: (phone) {
-                    _completePhoneNumber = phone.completeNumber;
-                  },
                 ),
                 const SizedBox(height: 24),
                 ElevatedButton(
                   onPressed: _isLoading ? null : _sendOTP,
-                  child: _isLoading 
-                    ? const SizedBox(height: 20, width: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
-                    : const Text('Send OTP'),
+                  child: _isLoading
+                      ? SizedBox(
+                          height: 20,
+                          width: 20,
+                          child: CircularProgressIndicator(
+                            color: Theme.of(context).colorScheme.onPrimary,
+                            strokeWidth: 2,
+                          ),
+                        )
+                      : const Text('Send OTP'),
                 ),
               ],
             ),

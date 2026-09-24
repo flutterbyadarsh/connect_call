@@ -1,21 +1,43 @@
 const { onDocumentCreated, onDocumentUpdated } = require("firebase-functions/v2/firestore");
-const { onCall } = require("firebase-functions/v2/https");
+const { onCall, HttpsError } = require("firebase-functions/v2/https");
 const admin = require("firebase-admin");
 const { RtcTokenBuilder, RtcRole } = require("agora-token");
 
 admin.initializeApp();
 
 const AGORA_APP_ID = "99082f23cb0047f8893f5b8ac23d50a7";
-const AGORA_APP_CERTIFICATE = "7fa0bf897d9c4bb587e3d1124489d287";
+const AGORA_APP_CERTIFICATE = process.env.AGORA_APP_CERTIFICATE || "7fa0bf897d9c4bb587e3d1124489d287";
 
 // ─── Agora Token Generator ───────────────────────────────────────────────────
 // Called by Flutter app before every call to get a fresh token (valid 1 hour)
 exports.generateAgoraToken = onCall({ region: "asia-south1" }, async (request) => {
+  if (!request.auth) {
+    throw new HttpsError("unauthenticated", "User must be authenticated to generate a token");
+  }
+
   const channelName = request.data.channelName;
   const uid = request.data.uid || 0;
 
   if (!channelName) {
-    throw new Error("channelName is required");
+    throw new HttpsError("invalid-argument", "channelName is required");
+  }
+
+  const callerUid = request.auth.uid;
+  const callsSnapshot = await admin.firestore().collection('calls').where('channelId', '==', channelName).get();
+  if (callsSnapshot.empty) {
+    throw new HttpsError("permission-denied", "Call not found");
+  }
+  
+  let authorized = false;
+  callsSnapshot.forEach(doc => {
+    const data = doc.data();
+    if (data.callerId === callerUid || data.receiverId === callerUid) {
+      authorized = true;
+    }
+  });
+
+  if (!authorized) {
+    throw new HttpsError("permission-denied", "User is not authorized for this channel");
   }
 
   const expirationTimeInSeconds = 3600; // 1 hour
@@ -49,6 +71,14 @@ exports.onCallInitiated = onDocumentCreated("calls/{callId}", async (event) => {
   const isVideo = callData.isVideo;
   const callId = event.params.callId;
 
+  const callerDoc = await admin.firestore().collection("users").doc(callerId).get();
+  if (!callerDoc.exists) {
+    console.log("No caller found for id:", callerId);
+    return null;
+  }
+  const trustedCallerName = callerDoc.data().name || callerName;
+  const trustedCallerPic = callerDoc.data().profileImageUrl || callData.callerPic || "";
+
   const userDoc = await admin.firestore().collection("users").doc(receiverId).get();
   if (!userDoc.exists) {
     console.log("No user found for id:", receiverId);
@@ -61,14 +91,12 @@ exports.onCallInitiated = onDocumentCreated("calls/{callId}", async (event) => {
     return null;
   }
 
-  const callerPic = callData.callerPic || "";
-
   const payload = {
     token: token,
     data: {
       id: callId,
-      nameCaller: callerName,
-      avatar: callerPic,
+      nameCaller: trustedCallerName,
+      avatar: trustedCallerPic,
       handle: "Connect Call",
       type: isVideo ? "1" : "0",
       extra: JSON.stringify({ callerId: callerId, isVideo: isVideo, agoraChannelId: callData.agoraChannelId }),
@@ -95,7 +123,7 @@ exports.onCallStatusChanged = onDocumentUpdated("calls/{callId}", async (event) 
 
   if (before.status === after.status) return null;
 
-  const terminalStatuses = ["cancelled", "declined", "missed", "ended"];
+  const terminalStatuses = ["cancelled", "declined", "missed", "ended", "rejected", "caller_ended"];
   if (!terminalStatuses.includes(after.status)) return null;
   
   // Clear the busy state for both participants
@@ -141,4 +169,57 @@ exports.onCallStatusChanged = onDocumentUpdated("calls/{callId}", async (event) 
     console.error("Error sending cancel FCM:", e);
   }
   return null;
+});
+
+// Triggered when a new chat message is created
+exports.onChatMessageSent = onDocumentCreated("chats/{chatRoomId}/messages/{messageId}", async (event) => {
+  const snapshot = event.data;
+  if (!snapshot) return;
+
+  const data = snapshot.data();
+  const senderId = data.sender_id;
+  const receiverId = data.receiver_id;
+  const content = data.content;
+  
+  if (!senderId || !receiverId) return;
+
+  const receiverDoc = await admin.firestore().collection("users").doc(receiverId).get();
+  if (!receiverDoc.exists) return;
+
+  const receiverToken = receiverDoc.data().fcmToken;
+  if (!receiverToken) return;
+
+  const senderDoc = await admin.firestore().collection("users").doc(senderId).get();
+  const senderName = senderDoc.exists ? senderDoc.data().name : "Unknown User";
+  const senderPic = senderDoc.exists ? (senderDoc.data().profileImageUrl || "") : "";
+
+  const chatPayload = {
+    token: receiverToken,
+    data: {
+      type: "chat",
+      messageId: event.params.messageId,
+      senderId: senderId,
+      receiverId: receiverId,
+      senderName: senderName,
+      senderPic: senderPic,
+      content: content,
+      timestamp: new Date().toISOString(),
+    },
+    android: { priority: "high" },
+    apns: { 
+      payload: {
+        aps: {
+          sound: "default",
+          badge: 1
+        }
+      }
+    },
+  };
+
+  try {
+    await admin.messaging().send(chatPayload);
+    console.log("Chat FCM sent to:", receiverId);
+  } catch (e) {
+    console.error("Error sending chat FCM:", e);
+  }
 });

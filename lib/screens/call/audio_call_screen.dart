@@ -1,167 +1,61 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import '../../core/theme/app_theme.dart';
 import '../../services/agora_service.dart';
-import '../../services/auth_service.dart';
-import 'dart:async';
-import 'dart:convert';
-import 'dart:io';
-import 'dart:typed_data';
+import '../../widgets/call_ui_widgets.dart';
+import '../../widgets/call_toast.dart';
+import 'video_call_screen.dart';
 
 class AudioCallScreen extends ConsumerStatefulWidget {
-  final String callerName; // This is now the Firestore callId (UUID)
+  final String callerName; // Firestore callId (UUID)
   final String agoraChannelId;
 
-  const AudioCallScreen({super.key, required this.callerName, required this.agoraChannelId});
+  const AudioCallScreen({
+    super.key,
+    required this.callerName,
+    required this.agoraChannelId,
+  });
 
   @override
   ConsumerState<AudioCallScreen> createState() => _AudioCallScreenState();
 }
 
-class _AudioCallScreenState extends ConsumerState<AudioCallScreen> {
-  Timer? _missedCallTimer;
-  StreamSubscription? _callStatusSubscription;
-  bool _canPop = false;
-  
-  String _remoteName = 'Connecting...';
-  String _remotePic = '';
-  Uint8List? _remotePicBytes;
-  
-  Timer? _callDurationTimer;
-  int _callDurationSeconds = 0;
-  
-  String get _formattedDuration {
-    final minutes = (_callDurationSeconds / 60).floor().toString().padLeft(2, '0');
-    final seconds = (_callDurationSeconds % 60).toString().padLeft(2, '0');
-    return '$minutes:$seconds';
-  }
-
+class _AudioCallScreenState extends ConsumerState<AudioCallScreen>
+    with WidgetsBindingObserver {
   @override
   void initState() {
     super.initState();
-    _initCall();
+    WidgetsBinding.instance.addObserver(this);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final state = ref.read(agoraServiceProvider);
+      if (state.isInitialized) return; // Prevent re-joining channel
+
+      ref
+          .read(agoraServiceProvider.notifier)
+          .startCallSession(
+            callId: widget.callerName,
+            agoraChannelId: widget.agoraChannelId,
+            isVideo: false,
+          );
+    });
   }
 
-  void _initCall() {
-    // Initialize Agora non-blocking
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      ref.read(agoraServiceProvider.notifier).initAgora(
-        channelId: widget.agoraChannelId,
-        isVideo: false,
-      );
-    });
-
-    // Missed call timer (45 seconds)
-    _missedCallTimer = Timer(const Duration(seconds: 45), () async {
-      final state = ref.read(agoraServiceProvider);
-      if (state.remoteUid == null && mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Call Missed')));
-        try {
-          await FirebaseFirestore.instance.collection('calls').doc(widget.callerName).update({'status': 'missed'});
-        } catch (e) {
-          debugPrint("Failed to update status to missed: $e");
-        }
-        if (mounted) Navigator.pop(context);
-      }
-    });
-
-    // Listen to call status changes from receiver (e.g. declined or ended)
-    _callStatusSubscription = FirebaseFirestore.instance
-        .collection('calls')
-        .doc(widget.callerName)
-        .snapshots(includeMetadataChanges: true)
-        .listen((doc) {
-      if (doc.metadata.isFromCache) return; // Prevent popping immediately from local cache
-      
-      if (doc.exists && mounted) {
-        final status = doc.data()?['status'] as String?;
-        final state = ref.read(agoraServiceProvider);
-
-        if (status == 'declined') {
-          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Call Declined')));
-          Navigator.pop(context);
-        } else if (status == 'ended') {
-          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Call Ended')));
-          Navigator.pop(context);
-        } else if (status == 'accepted') {
-          _missedCallTimer?.cancel();
-        }
-        
-        final data = doc.data();
-        if (data != null) {
-           final currentUid = ref.read(authServiceProvider).currentUser?.uid;
-           if (currentUid != null) {
-              String newRemoteName = _remoteName;
-              String newRemotePic = _remotePic;
-              
-              if (data['callerId'] == currentUid) {
-                 newRemoteName = data['receiverName'] ?? 'Unknown';
-                 newRemotePic = data['receiverPic'] ?? '';
-              } else {
-                 newRemoteName = data['callerName'] ?? 'Unknown';
-                 newRemotePic = data['callerPic'] ?? '';
-              }
-              
-              if (newRemoteName != _remoteName || newRemotePic != _remotePic) {
-                 setState(() {
-                   _remoteName = newRemoteName;
-                   _remotePic = newRemotePic;
-                   if (_remotePic.isNotEmpty) {
-                     try {
-                       _remotePicBytes = base64Decode(_remotePic.split(',').last);
-                     } catch (e) {
-                       _remotePicBytes = null;
-                     }
-                   } else {
-                     _remotePicBytes = null;
-                   }
-                 });
-              }
-           }
-        }
-      }
-    });
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState lifecycle) {
+    final notifier = ref.read(agoraServiceProvider.notifier);
+    if (lifecycle == AppLifecycleState.resumed) {
+      notifier.resumeMedia();
+    } else if (lifecycle == AppLifecycleState.paused ||
+        lifecycle == AppLifecycleState.inactive) {
+      notifier.pauseMedia();
+    }
   }
 
   @override
   void dispose() {
-    _missedCallTimer?.cancel();
-    _callStatusSubscription?.cancel();
-    _callDurationTimer?.cancel();
+    WidgetsBinding.instance.removeObserver(this);
     super.dispose();
-  }
-
-  void _startDurationTimer() {
-    _callDurationTimer?.cancel();
-    _callDurationTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
-      if (mounted) {
-        setState(() {
-          _callDurationSeconds++;
-        });
-      }
-    });
-  }
-
-  void _endCall() {
-    if (_canPop) return;
-    
-    _callStatusSubscription?.cancel();
-    final notifier = ref.read(agoraServiceProvider.notifier);
-    
-    // Run in background without awaiting to prevent UI freeze
-    notifier.disposeEngine(widget.callerName);
-    
-    if (mounted) {
-      setState(() {
-        _canPop = true;
-      });
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) {
-          Navigator.of(context).pop();
-        }
-      });
-    }
   }
 
   @override
@@ -169,137 +63,242 @@ class _AudioCallScreenState extends ConsumerState<AudioCallScreen> {
     final agoraState = ref.watch(agoraServiceProvider);
     final agoraNotifier = ref.read(agoraServiceProvider.notifier);
 
+    final isConnected = agoraState.remoteUid != null;
+    final isRinging = agoraState.callStatusText == 'Ringing';
+
     ref.listen<AgoraState>(agoraServiceProvider, (previous, next) {
-      if (next.isCallEndedByRemote && !(previous?.isCallEndedByRemote ?? false)) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Call ended by remote user')));
-        _endCall();
+      if (previous == null) return;
+
+      // 1. Transition to video screen if upgraded
+      if (!previous.isVideo && next.isVideo) {
+        if (Navigator.of(context).canPop()) {
+          Navigator.of(context).pushReplacement(
+            MaterialPageRoute(
+              builder: (_) => VideoCallScreen(
+                callerName: widget.callerName,
+                agoraChannelId: widget.agoraChannelId,
+              ),
+            ),
+          );
+        }
       }
-      if (next.remoteUid != null && (previous?.remoteUid == null)) {
-        _startDurationTimer();
+
+      // 2. Incoming video upgrade request dialog
+      if (previous.videoUpgradeRequest == null &&
+          next.videoUpgradeRequest != null) {
+        final currentUid = FirebaseAuth.instance.currentUser?.uid;
+        if (next.videoUpgradeRequest != currentUid) {
+          showDialog(
+            context: context,
+            barrierDismissible: false,
+            builder: (ctx) => AlertDialog(
+              backgroundColor: Colors.grey[900],
+              title: const Text(
+                'Video Call Request',
+                style: TextStyle(color: Colors.white),
+              ),
+              content: Text(
+                '${next.remoteName} wants to turn on video.',
+                style: const TextStyle(color: Colors.white70),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () {
+                    Navigator.pop(ctx);
+                    agoraNotifier.rejectVideoUpgrade();
+                  },
+                  child: const Text(
+                    'Decline',
+                    style: TextStyle(color: Colors.redAccent),
+                  ),
+                ),
+                TextButton(
+                  onPressed: () {
+                    Navigator.pop(ctx);
+                    agoraNotifier.acceptVideoUpgrade();
+                  },
+                  child: const Text(
+                    'Accept',
+                    style: TextStyle(color: Colors.greenAccent),
+                  ),
+                ),
+              ],
+            ),
+          );
+        }
       }
     });
-    
-    final isConnected = agoraState.remoteUid != null;
-    final statusText = agoraState.errorMsg ?? (isConnected ? _formattedDuration : 'Calling...');
 
     return PopScope(
-      canPop: _canPop,
-      onPopInvokedWithResult: (didPop, result) {
-        if (didPop) return;
-        _endCall();
+      canPop: true,
+      onPopInvokedWithResult: (didPop, _) {
+        if (didPop) agoraNotifier.setCallScreenVisible(false);
       },
       child: Scaffold(
         body: Container(
-        decoration: BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
-            colors: [
-              AppTheme.primaryColor.withOpacity(0.8),
-              Colors.black87,
-              Colors.black,
-            ],
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [
+                AppTheme.primaryColor.withValues(alpha: 0.85),
+                const Color(0xFF0F0C29),
+                Colors.black,
+              ],
+              stops: const [0.0, 0.55, 1.0],
+            ),
           ),
-        ),
-        child: SafeArea(
-          child: Column(
-            children: [
-              const SizedBox(height: 50),
-              
-              // Caller Info
-              Center(
-                child: Column(
-                  children: [
-                    Container(
-                      width: 120,
-                      height: 120,
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        color: Colors.white24,
-                        border: Border.all(color: Colors.white, width: 2),
-                      ),
-                      child: ClipOval(
-                        child: _remotePicBytes != null
-                            ? Image.memory(
-                                _remotePicBytes!,
-                                fit: BoxFit.cover,
-                                gaplessPlayback: true,
-                                errorBuilder: (c, e, s) => const Icon(Icons.person, size: 60, color: Colors.white),
-                              )
-                            : const Icon(Icons.person, size: 60, color: Colors.white),
-                      ),
-                    ),
-                    const SizedBox(height: 24),
-                    Text(
-                      _remoteName,
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 24,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    if (!agoraState.isInitialized && agoraState.errorMsg == null)
-                      const Padding(
-                        padding: EdgeInsets.only(top: 8.0),
-                        child: SizedBox(
-                          height: 20,
-                          width: 20,
-                          child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2),
+          child: SafeArea(
+            child: Column(
+              children: [
+                // ── Top bar ────────────────────────────────────────────────
+                Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 16.0,
+                    vertical: 8.0,
+                  ),
+                  child: Row(
+                    children: [
+                      IconButton(
+                        icon: const Icon(
+                          Icons.keyboard_arrow_down,
+                          color: Colors.white,
+                          size: 32,
                         ),
-                      )
-                    else
-                      Text(
-                        statusText,
-                        style: TextStyle(
-                          color: agoraState.errorMsg != null ? Colors.red : Colors.white70,
-                          fontSize: 16,
-                          fontWeight: agoraState.errorMsg != null ? FontWeight.bold : FontWeight.normal,
-                        ),
+                        tooltip: 'Minimise',
+                        onPressed: () {
+                          agoraNotifier.setCallScreenVisible(false);
+                          if (Navigator.of(context).canPop()) {
+                            Navigator.of(context).pop();
+                          }
+                        },
                       ),
-                  ],
-                ),
-              ),
-              
-              const Spacer(),
-              
-              // Controls
-              Container(
-                padding: const EdgeInsets.symmetric(vertical: 30, horizontal: 40),
-                decoration: const BoxDecoration(
-                  color: Colors.black45,
-                  borderRadius: BorderRadius.only(
-                    topLeft: Radius.circular(40),
-                    topRight: Radius.circular(40),
+                    ],
                   ),
                 ),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    _ControlButton(
-                      icon: agoraState.isMuted ? Icons.mic_off : Icons.mic,
-                      isActive: agoraState.isMuted,
-                      onTap: () => agoraNotifier.toggleMicrophone(),
-                    ),
-                    _ControlButton(
-                      icon: Icons.call_end,
-                      color: Colors.red,
-                      iconColor: Colors.white,
-                      size: 64,
-                      iconSize: 32,
-                      onTap: () => _endCall(),
-                    ),
-                    _SpeakerButton(agoraNotifier: agoraNotifier),
-                  ],
+
+                const SizedBox(height: 16),
+
+                // ── Caller info ────────────────────────────────────────────
+                Expanded(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      // Pulsing ripple avatar
+                      RippleAvatar(
+                        imageBytes: agoraState.remotePicBytes,
+                        isRinging: isRinging,
+                        isConnected: isConnected,
+                      ),
+
+                      const SizedBox(height: 28),
+
+                      // Remote user name
+                      Text(
+                        agoraState.remoteName,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 26,
+                          fontWeight: FontWeight.w700,
+                          letterSpacing: 0.2,
+                        ),
+                      ),
+
+                      const SizedBox(height: 12),
+
+                      // Animated status / timer
+                      CallStatusText(
+                        isConnected: isConnected,
+                        isInitialized: agoraState.isInitialized,
+                        statusText:
+                            agoraState.errorMsg ?? agoraState.callStatusText,
+                        formattedDuration: agoraState.formattedDuration,
+                        errorMsg: agoraState.errorMsg,
+                      ),
+
+                      const SizedBox(height: 20),
+
+                      // E2E encryption badge
+                      const EncryptionBadge(),
+                    ],
+                  ),
                 ),
-              ),
-            ],
+
+                // ── Controls ───────────────────────────────────────────────
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    vertical: 32,
+                    horizontal: 40,
+                  ),
+                  decoration: BoxDecoration(
+                    color: Colors.black.withValues(alpha: 0.45),
+                    borderRadius: const BorderRadius.only(
+                      topLeft: Radius.circular(44),
+                      topRight: Radius.circular(44),
+                    ),
+                  ),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                    children: [
+                      HapticControlButton(
+                        icon: agoraState.isMuted ? Icons.mic_off : Icons.mic,
+                        isActive: agoraState.isMuted,
+                        tooltip: agoraState.isMuted ? 'Unmute' : 'Mute',
+                        onTap: agoraNotifier.toggleMicrophone,
+                      ),
+
+                      // ── Video Upgrade Button ──
+                      HapticControlButton(
+                        icon: Icons.videocam,
+                        tooltip: 'Turn on video',
+                        onTap: () {
+                          if (agoraState.videoUpgradeRequest != null) {
+                            CallToast.show(
+                              message: "Request already sent...",
+                              type: CallToastType.info,
+                            );
+                          } else {
+                            agoraNotifier.requestVideoUpgrade();
+                            CallToast.show(
+                              message: "Requesting video upgrade...",
+                              type: CallToastType.info,
+                            );
+                          }
+                        },
+                      ),
+
+                      // Hang-up button — heavyImpact already fires in endCallSession
+                      GestureDetector(
+                        onTap: agoraNotifier.endCallSession,
+                        child: Container(
+                          width: 64,
+                          height: 64,
+                          decoration: const BoxDecoration(
+                            color: Colors.red,
+                            shape: BoxShape.circle,
+                          ),
+                          child: const Icon(
+                            Icons.call_end,
+                            size: 32,
+                            color: Colors.white,
+                          ),
+                        ),
+                      ),
+
+                      _SpeakerButton(agoraNotifier: agoraNotifier),
+                    ],
+                  ),
+                ),
+              ],
+            ),
           ),
         ),
       ),
-    ));
+    );
   }
 }
+
+// ── Speaker toggle (local state only) ─────────────────────────────────────────
 
 class _SpeakerButton extends StatefulWidget {
   final AgoraService agoraNotifier;
@@ -314,55 +313,14 @@ class _SpeakerButtonState extends State<_SpeakerButton> {
 
   @override
   Widget build(BuildContext context) {
-    return _ControlButton(
+    return HapticControlButton(
       icon: _isSpeaker ? Icons.volume_up : Icons.volume_down,
       isActive: _isSpeaker,
+      tooltip: _isSpeaker ? 'Earpiece' : 'Speaker',
       onTap: () {
-        setState(() {
-          _isSpeaker = !_isSpeaker;
-        });
+        setState(() => _isSpeaker = !_isSpeaker);
         widget.agoraNotifier.setSpeakerphone(_isSpeaker);
       },
-    );
-  }
-}
-
-class _ControlButton extends StatelessWidget {
-  final IconData icon;
-  final VoidCallback onTap;
-  final Color? color;
-  final Color? iconColor;
-  final bool isActive;
-  final double size;
-  final double iconSize;
-
-  const _ControlButton({
-    required this.icon,
-    required this.onTap,
-    this.color,
-    this.iconColor,
-    this.isActive = false,
-    this.size = 56,
-    this.iconSize = 28,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        width: size,
-        height: size,
-        decoration: BoxDecoration(
-          color: color ?? (isActive ? Colors.white : Colors.white24),
-          shape: BoxShape.circle,
-        ),
-        child: Icon(
-          icon,
-          size: iconSize,
-          color: iconColor ?? (isActive ? Colors.black : Colors.white),
-        ),
-      ),
     );
   }
 }

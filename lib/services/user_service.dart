@@ -8,6 +8,28 @@ final userServiceProvider = ChangeNotifierProvider<UserService>((ref) {
   return UserService();
 });
 
+final userPresenceProvider = StreamProvider.family<UserModel, String>((
+  ref,
+  uid,
+) {
+  return FirebaseFirestore.instance
+      .collection('users')
+      .doc(uid)
+      .snapshots()
+      .map((doc) {
+        if (doc.exists && doc.data() != null) {
+          return UserModel.fromMap(doc.data()!, doc.id);
+        }
+        return UserModel(
+          uid: uid,
+          phoneNumber: '',
+          email: '',
+          name: 'Unknown',
+          isOnline: false,
+        );
+      });
+});
+
 class UserService extends ChangeNotifier {
   List<UserModel> _users = [];
   bool _isLoading = false;
@@ -37,17 +59,20 @@ class UserService extends ChangeNotifier {
         .collection('contacts')
         .snapshots()
         .listen((snapshot) async {
-      List<UserModel> tempUsers = [];
-      for (var doc in snapshot.docs) {
-        final contactId = doc.id;
-        final contactDoc = await FirebaseFirestore.instance.collection('users').doc(contactId).get();
-        if (contactDoc.exists) {
-          tempUsers.add(UserModel.fromMap(contactDoc.data()!, contactId));
-        }
-      }
-      _users = tempUsers;
-      notifyListeners();
-    });
+          List<UserModel> tempUsers = [];
+          for (var doc in snapshot.docs) {
+            final contactId = doc.id;
+            final contactDoc = await FirebaseFirestore.instance
+                .collection('users')
+                .doc(contactId)
+                .get();
+            if (contactDoc.exists) {
+              tempUsers.add(UserModel.fromMap(contactDoc.data()!, contactId));
+            }
+          }
+          _users = tempUsers;
+          notifyListeners();
+        });
   }
 
   Future<void> fetchUsers() async {
