@@ -406,10 +406,24 @@ class AgoraService extends StateNotifier<AgoraState> {
       final dynamicToken = agoraData['token']!;
       final backendAppId = agoraData['appId']!;
 
+      final finalAppId = backendAppId.isNotEmpty ? backendAppId : _kAgoraAppId;
+
+      if (finalAppId.isEmpty) {
+        debugPrint(
+          "❌ [AgoraService] Aborting: App ID is empty. Cannot initialize.",
+        );
+        state = state.copyWith(
+          isInitializing: false,
+          errorMsg: 'Configuration error: App ID missing.',
+        );
+        endCallSession(updateStatus: false);
+        return;
+      }
+
       _engine = createAgoraRtcEngine();
       await _engine!.initialize(
         RtcEngineContext(
-          appId: backendAppId.isNotEmpty ? backendAppId : _kAgoraAppId,
+          appId: finalAppId,
           channelProfile: ChannelProfileType.channelProfileCommunication,
         ),
       );
