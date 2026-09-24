@@ -1,62 +1,69 @@
 const { onDocumentCreated, onDocumentUpdated } = require("firebase-functions/v2/firestore");
 const { onCall, HttpsError } = require("firebase-functions/v2/https");
+const { defineSecret } = require("firebase-functions/params");
 const admin = require("firebase-admin");
 const { RtcTokenBuilder, RtcRole } = require("agora-token");
 
 admin.initializeApp();
 
-const AGORA_APP_ID = "99082f23cb0047f8893f5b8ac23d50a7";
-const AGORA_APP_CERTIFICATE = process.env.AGORA_APP_CERTIFICATE || "7fa0bf897d9c4bb587e3d1124489d287";
+// Agora credentials — stored in Firebase Secret Manager (never in code)
+const AGORA_APP_ID = defineSecret("AGORA_APP_ID");
+const AGORA_APP_CERTIFICATE = defineSecret("AGORA_APP_CERTIFICATE");
 
 // ─── Agora Token Generator ───────────────────────────────────────────────────
 // Called by Flutter app before every call to get a fresh token (valid 1 hour)
-exports.generateAgoraToken = onCall({ region: "asia-south1" }, async (request) => {
-  if (!request.auth) {
-    throw new HttpsError("unauthenticated", "User must be authenticated to generate a token");
-  }
-
-  const channelName = request.data.channelName;
-  const uid = request.data.uid || 0;
-
-  if (!channelName) {
-    throw new HttpsError("invalid-argument", "channelName is required");
-  }
-
-  const callerUid = request.auth.uid;
-  const callsSnapshot = await admin.firestore().collection('calls').where('channelId', '==', channelName).get();
-  if (callsSnapshot.empty) {
-    throw new HttpsError("permission-denied", "Call not found");
-  }
-  
-  let authorized = false;
-  callsSnapshot.forEach(doc => {
-    const data = doc.data();
-    if (data.callerId === callerUid || data.receiverId === callerUid) {
-      authorized = true;
+exports.generateAgoraToken = onCall(
+  { region: "asia-south1", secrets: [AGORA_APP_ID, AGORA_APP_CERTIFICATE] },
+  async (request) => {
+    if (!request.auth) {
+      throw new HttpsError("unauthenticated", "User must be authenticated to generate a token");
     }
-  });
 
-  if (!authorized) {
-    throw new HttpsError("permission-denied", "User is not authorized for this channel");
+    const channelName = request.data.channelName;
+    const uid = request.data.uid || 0;
+
+    if (!channelName) {
+      throw new HttpsError("invalid-argument", "channelName is required");
+    }
+
+    const callerUid = request.auth.uid;
+    const callsSnapshot = await admin.firestore().collection('calls').where('channelId', '==', channelName).get();
+    if (callsSnapshot.empty) {
+      throw new HttpsError("permission-denied", "Call not found");
+    }
+    
+    let authorized = false;
+    callsSnapshot.forEach(doc => {
+      const data = doc.data();
+      if (data.callerId === callerUid || data.receiverId === callerUid) {
+        authorized = true;
+      }
+    });
+
+    if (!authorized) {
+      throw new HttpsError("permission-denied", "User is not authorized for this channel");
+    }
+
+    const appId = AGORA_APP_ID.value();
+    const appCert = AGORA_APP_CERTIFICATE.value();
+    const expirationTimeInSeconds = 3600;
+    const currentTimestamp = Math.floor(Date.now() / 1000);
+    const privilegeExpiredTs = currentTimestamp + expirationTimeInSeconds;
+
+    const token = RtcTokenBuilder.buildTokenWithUid(
+      appId,
+      appCert,
+      channelName,
+      uid,
+      RtcRole.PUBLISHER,
+      privilegeExpiredTs,
+      privilegeExpiredTs
+    );
+
+    console.log(`Generated Agora token for channel: ${channelName}, uid: ${uid}`);
+    return { token: token, appId: appId };
   }
-
-  const expirationTimeInSeconds = 3600; // 1 hour
-  const currentTimestamp = Math.floor(Date.now() / 1000);
-  const privilegeExpiredTs = currentTimestamp + expirationTimeInSeconds;
-
-  const token = RtcTokenBuilder.buildTokenWithUid(
-    AGORA_APP_ID,
-    AGORA_APP_CERTIFICATE,
-    channelName,
-    uid,
-    RtcRole.PUBLISHER,
-    privilegeExpiredTs,
-    privilegeExpiredTs
-  );
-
-  console.log(`Generated Agora token for channel: ${channelName}, uid: ${uid}`);
-  return { token: token, appId: AGORA_APP_ID };
-});
+);
 
 // ─── Incoming Call FCM ───────────────────────────────────────────────────────
 // Triggered when a new call document is CREATED → sends FCM to receiver
